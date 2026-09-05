@@ -26,60 +26,21 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "")
 
-def generate_script_safe(topic):
-    if GEMINI_API_KEY:
-        models = ["gemini-1.5-flash", "gemini-1.5-pro"]
-        prompt = f"""
-        Topic: '{topic}'
-        YouTube Shorts aur Reels ke liye viral 3 scenes ka structure valid JSON format me do.
-        Har scene me speech sentence aur Pexels ke liye specific visual search term (English me) do.
-        Output ONLY valid JSON:
-        {{
-          "scenes": [
-            {{"speech": "पहला हुक वाक्य हिंदी में", "sub": "छोटा सबटाइटल", "search": "accurate english query 1"}},
-            {{"speech": "दूसरा मुख्य वाक्य हिंदी में", "sub": "छोटा सबटाइटल", "search": "accurate english query 2"}},
-            {{"speech": "तीसरा निष्कर्ष वाक्य हिंदी में", "sub": "अभी फॉलो करें", "search": "accurate english query 3"}}
-          ]
-        }}
-        """
-        for m in models:
-            try:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={GEMINI_API_KEY}"
-                payload = {"contents": [{"parts": [{"text": prompt}]}]}
-                res = requests.post(url, json=payload, timeout=12)
-                if res.status_code == 200:
-                    data = res.json()
-                    text = data['candidates'][0]['content']['parts'][0]['text']
-                    clean_text = text.replace("```json", "").replace("```", "").strip()
-                    match = re.search(r'\{.*\}', clean_text, re.DOTALL)
-                    parsed = json.loads(match.group(0)) if match else json.loads(clean_text)
-                    if "scenes" in parsed and len(parsed["scenes"]) >= 2:
-                        return parsed["scenes"]
-            except Exception as e:
-                print(f"Model {m} failed: {e}")
-                continue
-
-    return [
-        {"speech": f"क्या आप जानते हैं {topic} के बारे में यह सच?", "sub": f"{topic}", "search": "alone dark cinematic"},
-        {"speech": "जिंदगी में हर मुश्किल वक्त हमें कुछ नया सिखाने के लिए ही आता है।", "sub": "हिम्मत रखें", "search": "walking alone rain cinematic"},
-        {"speech": "खुद पर भरोसा रखें, सब ठीक होगा। ऐसे ही विचारों के लिए फॉलो करें।", "sub": "अभी फॉलो करें", "search": "sunrise hope mountain cinematic"}
-    ]
-
-FONT_PATH = "hindi_font.ttf"
+FONT_PATH = "unicode_font.ttf"
 BGM_PATH = "bgm.mp3"
 
 def ensure_assets():
-    if not os.path.exists(FONT_PATH):
-        font_url = "https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoSansDevanagari/NotoSansDevanagari-Bold.ttf"
+    if not os.path.exists(FONT_PATH) or os.path.getsize(FONT_PATH) < 5000:
+        font_url = "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSansDevanagari/NotoSansDevanagari-Bold.ttf"
         try:
-            r = requests.get(font_url, timeout=15)
+            r = requests.get(font_url, timeout=20)
             if r.status_code == 200:
                 with open(FONT_PATH, "wb") as f:
                     f.write(r.content)
         except Exception:
             pass
 
-    if not os.path.exists(BGM_PATH):
+    if not os.path.exists(BGM_PATH) or os.path.getsize(BGM_PATH) < 5000:
         bgm_url = "https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3?filename=ambient-cinematic-112282.mp3"
         try:
             r = requests.get(bgm_url, timeout=20)
@@ -93,32 +54,73 @@ def clean_for_speech(text):
     text = re.sub(r'[*_~`#\[\]\(\)\<\>\"\'\\]', ' ', text)
     return re.sub(r'\s+', ' ', text).strip()
 
+def generate_script_safe(topic):
+    # Gemini API कॉल विथ स्ट्रिक्ट JSON
+    if GEMINI_API_KEY:
+        models = ["gemini-1.5-flash", "gemini-1.5-pro"]
+        prompt = (
+            f"Topic: '{topic}'. Create a viral 3-scene Hindi video reel. "
+            f"Return ONLY valid raw JSON without markdown backticks:\n"
+            f'{{"scenes": ['
+            f'{{"speech": "Scene 1 Hindi speech", "sub": "Scene 1 short Hindi subtitle", "search": "accurate english pexels search keyword"}},'
+            f'{{"speech": "Scene 2 Hindi speech", "sub": "Scene 2 short Hindi subtitle", "search": "accurate english pexels search keyword"}},'
+            f'{{"speech": "Scene 3 Hindi speech", "sub": "Scene 3 short Hindi subtitle", "search": "accurate english pexels search keyword"}}'
+            f']}}'
+        )
+        for m in models:
+            try:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={GEMINI_API_KEY}"
+                payload = {
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {"temperature": 0.6}
+                }
+                res = requests.post(url, json=payload, timeout=12)
+                if res.status_code == 200:
+                    data = res.json()
+                    text = data['candidates'][0]['content']['parts'][0]['text']
+                    clean_text = text.replace("```json", "").replace("```", "").strip()
+                    match = re.search(r'\{.*\}', clean_text, re.DOTALL)
+                    parsed = json.loads(match.group(0)) if match else json.loads(clean_text)
+                    if "scenes" in parsed and len(parsed["scenes"]) >= 2:
+                        return parsed["scenes"]
+            except Exception as e:
+                print(f"Gemini API error on {m}: {e}")
+                continue
+
+    # टॉपिक आधारित डायनामिक फॉलबैक (अगर API की लिमिट या एरर हो तो भी उसी टॉपिक का वीडियो बनेगा)
+    safe_search = re.sub(r'[^a-zA-Z0-9\s]', '', topic).strip() or "cinematic mystery"
+    return [
+        {"speech": f"क्या आप जानते हैं {topic} से जुड़ी यह सबसे बड़ी बात?", "sub": f"{topic}", "search": f"{safe_search} 4k cinematic"},
+        {"speech": f"वैज्ञानिकों और जानकारों के अनुसार {topic} की तकनीक बेहद अद्भुत है।", "sub": "अद्भुत तकनीक", "search": f"{safe_search} technology cinematic"},
+        {"speech": "अगर आपको यह जानकारी पसंद आई, तो अभी फॉलो और सब्सक्राइब करें।", "sub": "अभी फॉलो करें", "search": "subscribe cinematic technology"}
+    ]
+
 def get_file_duration(file_path):
     cmd = f"ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 \"{file_path}\""
     try:
         out = subprocess.check_output(cmd, shell=True).decode().strip()
         return max(2.5, float(out))
     except Exception:
-        return 4.0
+        return 4.5
 
 def download_pexels_clip(query, out_filename, scene_index=0):
     if not PEXELS_API_KEY:
         return False
     clean_q = requests.utils.quote(query)
-    url = f"https://api.pexels.com/videos/search?query={clean_q}&orientation=portrait&per_page=6"
+    url = f"https://api.pexels.com/videos/search?query={clean_q}&orientation=portrait&per_page=10"
     headers = {"Authorization": PEXELS_API_KEY}
     try:
-        res = requests.get(url, headers=headers, timeout=12).json()
+        res = requests.get(url, headers=headers, timeout=14).json()
         videos = res.get("videos", [])
         if not videos:
-            alt_url = "https://api.pexels.com/videos/search?query=cinematic+nature+alone&orientation=portrait&per_page=6"
-            videos = requests.get(alt_url, headers=headers, timeout=12).json().get("videos", [])
+            alt_url = "https://api.pexels.com/videos/search?query=technology+cinematic&orientation=portrait&per_page=10"
+            videos = requests.get(alt_url, headers=headers, timeout=14).json().get("videos", [])
         
         if videos:
             chosen_vid = videos[scene_index % len(videos)]
             files = [f for f in chosen_vid.get("video_files", []) if f.get("height", 0) > f.get("width", 0)]
             target = files[0]["link"] if files else chosen_vid["video_files"][0]["link"]
-            with requests.get(target, stream=True, timeout=20) as r:
+            with requests.get(target, stream=True, timeout=25) as r:
                 with open(out_filename, "wb") as f:
                     for chunk in r.iter_content(chunk_size=1024*256):
                         f.write(chunk)
@@ -132,7 +134,7 @@ def make_subtitle_png(text, png_filename, width=720, height=1280):
     img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     try:
-        font = ImageFont.truetype(FONT_PATH, 42)
+        font = ImageFont.truetype(FONT_PATH, 44)
     except Exception:
         font = ImageFont.load_default()
 
@@ -140,22 +142,25 @@ def make_subtitle_png(text, png_filename, width=720, height=1280):
     lines, cur = [], []
     for w in words:
         cur.append(w)
-        if len(" ".join(cur)) > 14:
+        if len(" ".join(cur)) > 12:
             lines.append(" ".join(cur[:-1]))
             cur = [w]
     if cur:
         lines.append(" ".join(cur))
 
-    y = int(height * 0.74)
+    # सबटाइटल को स्क्रीन के निचले-मध्य भाग में साफ़ दिखाना
+    y = int(height * 0.72)
     for line in lines:
         bbox = draw.textbbox((0, 0), line, font=font)
         tw = bbox[2] - bbox[0]
         th = bbox[3] - bbox[1]
         x = (width - tw) // 2
-        pad = 10
-        draw.rectangle([x - pad, y - pad, x + tw + pad, y + th + pad], fill=(0, 0, 0, 215))
-        draw.text((x, y), line, fill=(255, 230, 0, 255), font=font)
-        y += th + 18
+        pad_x = 18
+        pad_y = 10
+        # डार्क बैकग्राउंड बॉक्स और चमकीला पीला टेक्स्ट
+        draw.rounded_rectangle([x - pad_x, y - pad_y, x + tw + pad_x, y + th + pad_y], radius=12, fill=(0, 0, 0, 220))
+        draw.text((x, y), line, fill=(255, 235, 20, 255), font=font)
+        y += th + 24
     img.save(png_filename)
     img.close()
 
@@ -165,7 +170,6 @@ async def build_viral_reel(topic):
     temp_files = []
     full_script_lines = []
 
-    # 720p HD रेजोल्यूशन (720x1280)
     W, H = 720, 1280
 
     for idx, sc in enumerate(scenes):
@@ -179,21 +183,26 @@ async def build_viral_reel(topic):
         seg_out = f"seg_{idx}.mp4"
         temp_files.extend([scene_audio, raw_clip, sub_png, seg_out])
 
+        # वॉइस जनरेशन विथ बैकअप
         try:
             comm = edge_tts.Communicate(speech_text, voice="hi-IN-SwaraNeural")
             await comm.save(scene_audio)
         except Exception:
             comm = edge_tts.Communicate(speech_text, voice="hi-IN-MadhurNeural")
             await comm.save(scene_audio)
+
         dur = get_file_duration(scene_audio)
 
-        ok = download_pexels_clip(sc.get("search", topic), raw_clip, scene_index=idx)
+        # सटीक विजुअल सर्च
+        search_query = sc.get("search", topic)
+        ok = download_pexels_clip(search_query, raw_clip, scene_index=idx)
         if not ok or not os.path.exists(raw_clip):
-            download_pexels_clip("cinematic emotion", raw_clip, scene_index=idx)
+            download_pexels_clip(f"{topic} cinematic", raw_clip, scene_index=idx)
 
+        # सबटाइटल इमेज तैयार करना
         make_subtitle_png(sub_text, sub_png, width=W, height=H)
 
-        # 720p HD ऑप्टिमाइज़्ड एन्कोडिंग (1 थ्रेड + 1024k बफ़र)
+        # FFmpeg: ऑडियो लेंथ (dur) के बराबर परफेक्ट सिंकिंग + 720p क्रॉप
         ff_cmd = (
             f"ffmpeg -y -t {dur} -stream_loop -1 -i \"{raw_clip}\" -i \"{sub_png}\" -i \"{scene_audio}\" "
             f"-filter_complex \"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H}[v0];"
@@ -238,10 +247,10 @@ async def build_viral_reel(topic):
 async def generate_reel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     topic = clean_for_speech(" ".join(context.args))
     if not topic:
-        await update.message.reply_text("कृपया विषय लिखें। उदाहरण: `/reel बहुत उदास मन`")
+        await update.message.reply_text("कृपया विषय लिखें। उदाहरण: `/reel रॉकेट कैसे काम करता है`")
         return
 
-    wait_msg = await update.message.reply_text("⚡ HD 720p रील्स तैयार हो रही है, कृपया 1-2 मिनट प्रतीक्षा करें...")
+    wait_msg = await update.message.reply_text(f"⚡ '{topic}' पर HD 720p रील तैयार की जा रही है, कृपया 1 मिनट प्रतीक्षा करें...")
     temp_files = []
     try:
         script, video, temp_files = await build_viral_reel(topic)
