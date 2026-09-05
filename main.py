@@ -9,7 +9,6 @@ from duckduckgo_search import DDGS
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-# Render port binding server
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -25,18 +24,29 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-pro")
+
+# ऑटो-डिटेक्ट मॉडल ताकि 404 एरर कभी न आए
+def get_working_model():
+    try:
+        for m in genai.list_models():
+            if "generateContent" in m.supported_generation_methods:
+                return genai.GenerativeModel(m.name)
+    except Exception:
+        pass
+    return genai.GenerativeModel("models/gemini-1.5-flash")
+
+model = get_working_model()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
         "👑 *Hermes Master AI Agent सक्रिय है!*\n\n"
         "उपलब्ध कमांड्स:\n"
-        "🔹 `/reel <टॉपिक>` - 30-40s वायरल स्क्रिप्ट + HD वॉइसओवर तैयार करें\n"
-        "🔹 `/news <विषय>` - लाइव इंटरनेट सर्च और ट्रेंडिंग रिसर्च\n"
-        "🔹 `/market <स्टॉक>` - शेयर बाजार लाइव भाव व ओवरव्यू\n"
+        "🔹 `/reel <टॉपिक>` - 30-40s वायरल स्क्रिप्ट + HD वॉइसओवर\n"
+        "🔹 `/news <विषय>` - लाइव इंटरनेट सर्च\n"
+        "🔹 `/market <स्टॉक>` - शेयर बाजार लाइव भाव\n"
         "🔹 `/quiz <टॉपिक>` - अभ्यास MCQs\n"
         "🔹 `/status` - सिस्टम हेल्थ चेक\n"
-        "🔹 `/stop` - प्रोसेस रीसेट करें"
+        "🔹 `/stop` - प्रोसेस रीसेट"
     )
     await update.message.reply_text(msg, parse_mode="Markdown")
 
