@@ -24,7 +24,6 @@ def run_http_server():
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "")
 
 FONT_PATH = "NotoSansDevanagari.ttf"
 BGM_PATH = "bgm.mp3"
@@ -55,7 +54,6 @@ def clean_text(text):
     return re.sub(r'\s+', ' ', text).strip()
 
 def clean_user_prompt(text):
-    # फालतू निर्देश हटाकर केवल मुख्य विषय निकालना
     t = clean_text(text)
     t = re.sub(r'(पर वीडियो बनाओ|वीडियो बनाओ|के बारे में बताओ|अच्छे से विजुअल|वीडियो बनाइए|रील बनाओ)', '', t, flags=re.IGNORECASE)
     return t.strip() or text.strip()
@@ -70,19 +68,21 @@ def generate_script_safe(raw_topic):
             "x-goog-api-key": GEMINI_API_KEY
         }
         prompt = f"""
-You are a viral YouTube Shorts/Instagram Reels director.
-Create an awesome, factual, and viral 3-scene video about: '{topic}'.
-Each scene MUST have:
-1. 'speech': 1 engaging Hindi sentence explaining a specific real fact about '{topic}'.
-2. 'sub': 2-3 short Hindi words for subtitle.
-3. 'search': 2-3 accurate ENGLISH search keywords for stock footage matching '{topic}' (e.g. if topic is lion, use 'lion hunting savannah'; if bike, use 'superbike riding high speed').
+You are a viral YouTube Shorts / Reels creator.
+Topic: '{topic}'
 
-Return ONLY valid JSON matching this schema:
+Generate an awesome 3-scene Hindi video script specifically about '{topic}'.
+For each scene provide:
+- 'speech': 1 single compelling Hindi sentence explaining a specific fact about '{topic}'.
+- 'sub': 2-3 short Hindi words for subtitle.
+- 'image_prompt': A highly detailed, realistic, cinematic 8k description in English for AI image generation (e.g., 'majestic lion roaring on a rocky cliff in african savannah at sunset, photorealistic, 8k, dramatic lighting').
+
+Return ONLY valid JSON:
 {{
   "scenes": [
-    {{"speech": "पहला दृश्य वाक्य हिंदी में", "sub": "संक्षिप्त सबटाइटल", "search": "accurate english pexels query"}},
-    {{"speech": "दूसरा दृश्य वाक्य हिंदी में", "sub": "संक्षिप्त सबटाइटल", "search": "accurate english pexels query"}},
-    {{"speech": "तीसरा दृश्य वाक्य हिंदी में", "sub": "फॉलो करें", "search": "accurate english pexels query"}}
+    {{"speech": "पहला दृश्य वाक्य हिंदी में", "sub": "संक्षिप्त सबटाइटल", "image_prompt": "detailed english prompt 1"}},
+    {{"speech": "दूसरा दृश्य वाक्य हिंदी में", "sub": "संक्षिप्त सबटाइटल", "image_prompt": "detailed english prompt 2"}},
+    {{"speech": "तीसरा दृश्य वाक्य हिंदी में", "sub": "फॉलो करें", "image_prompt": "detailed english prompt 3"}}
   ]
 }}
 """
@@ -106,18 +106,16 @@ Return ONLY valid JSON matching this schema:
                         parsed = json.loads(match.group(0))
                         if "scenes" in parsed and len(parsed["scenes"]) >= 3:
                             return parsed["scenes"]
-                else:
-                    print(f"Gemini API Error [{res.status_code}]: {res.text}")
             except Exception as e:
-                print(f"Model {m} exception: {e}")
+                print(f"Gemini API error on {m}: {e}")
                 continue
 
-    # अगर API से रिस्पॉन्स न मिले तो विषय के आधार पर सटीक कीवर्ड्स
-    en_query = re.sub(r'[^a-zA-Z0-9\s]', '', topic).strip() or "cinematic nature"
+    # ऑटो फॉलबैक
+    en_query = re.sub(r'[^a-zA-Z0-9\s]', '', topic).strip() or "majestic cinematic wonder"
     return [
-        {"speech": f"क्या आप जानते हैं कि {topic} असल में इतना खास क्यों है?", "sub": f"{topic[:10]}", "search": f"{en_query} cinematic 4k"},
-        {"speech": f"इसके पीछे कई ऐसे अनसुने तथ्य हैं जो अक्सर लोगों को पता नहीं होते।", "sub": "अनसुने तथ्य", "search": f"{en_query} action wildlife technology"},
-        {"speech": "ऐसी ही शानदार और ज्ञानवर्धक जानकारियों के लिए हमें अभी फॉलो करें।", "sub": "अभी फॉलो करें", "search": "subscribe cinematic technology"}
+        {"speech": f"क्या आप जानते हैं {topic} से जुड़ी यह सबसे बड़ी बात?", "sub": "अनोखा सच", "image_prompt": f"cinematic detailed masterpiece of {en_query}, 8k, dramatic lighting, photorealistic"},
+        {"speech": f"इसके पीछे कई ऐसे रहस्य हैं जो हर किसी को हैरान कर देते हैं।", "sub": "गहरा रहस्य", "image_prompt": f"epic visual representation of {en_query}, hyper realistic, cinematic atmosphere, 8k"},
+        {"speech": "ऐसी ही रोचक जानकारियों के लिए हमें अभी फॉलो और सब्सक्राइब करें।", "sub": "अभी फॉलो करें", "image_prompt": f"breathtaking scene related to {en_query}, inspirational sunrise, 8k"}
     ]
 
 def get_file_duration(file_path):
@@ -128,30 +126,18 @@ def get_file_duration(file_path):
     except Exception:
         return 4.5
 
-def download_pexels_clip(query, out_filename, scene_index=0):
-    if not PEXELS_API_KEY:
-        return False
-    clean_q = requests.utils.quote(query)
-    url = f"https://api.pexels.com/videos/search?query={clean_q}&orientation=portrait&per_page=10"
-    headers = {"Authorization": PEXELS_API_KEY}
+def download_ai_image(prompt, out_filename):
+    # Pollinations AI से 100% फ्री और सटीक 9:16 HD इमेज जनरेशन
+    clean_p = requests.utils.quote(prompt + ", vertical 9:16 portrait orientation, photorealistic, ultra hd")
+    url = f"https://image.pollinations.ai/prompt/{clean_p}?width=720&height=1280&nologo=true&model=flux"
     try:
-        res = requests.get(url, headers=headers, timeout=15).json()
-        videos = res.get("videos", [])
-        if not videos:
-            alt_url = "https://api.pexels.com/videos/search?query=wildlife+nature+cinematic&orientation=portrait&per_page=10"
-            videos = requests.get(alt_url, headers=headers, timeout=15).json().get("videos", [])
-        
-        if videos:
-            chosen_vid = videos[scene_index % len(videos)]
-            files = [f for f in chosen_vid.get("video_files", []) if f.get("height", 0) > f.get("width", 0)]
-            target = files[0]["link"] if files else chosen_vid["video_files"][0]["link"]
-            with requests.get(target, stream=True, timeout=25) as r:
-                with open(out_filename, "wb") as f:
-                    for chunk in r.iter_content(chunk_size=1024*256):
-                        f.write(chunk)
+        r = requests.get(url, timeout=30)
+        if r.status_code == 200 and len(r.content) > 15000:
+            with open(out_filename, "wb") as f:
+                f.write(r.content)
             return True
     except Exception as e:
-        print(f"Pexels error: {e}")
+        print(f"Image generation error: {e}")
     return False
 
 def make_subtitle_png(text, png_filename, width=720, height=1280):
@@ -202,11 +188,12 @@ async def build_viral_reel(topic):
         full_script_lines.append(speech_text)
 
         scene_audio = f"audio_{idx}.mp3"
-        raw_clip = f"raw_{idx}.mp4"
+        scene_img = f"img_{idx}.jpg"
         sub_png = f"sub_{idx}.png"
         seg_out = f"seg_{idx}.mp4"
-        temp_files.extend([scene_audio, raw_clip, sub_png, seg_out])
+        temp_files.extend([scene_audio, scene_img, sub_png, seg_out])
 
+        # वॉइस जनरेशन
         try:
             comm = edge_tts.Communicate(speech_text, voice="hi-IN-SwaraNeural")
             await comm.save(scene_audio)
@@ -216,18 +203,27 @@ async def build_viral_reel(topic):
 
         dur = get_file_duration(scene_audio)
 
-        search_query = sc.get("search", topic)
-        ok = download_pexels_clip(search_query, raw_clip, scene_index=idx)
-        if not ok or not os.path.exists(raw_clip):
-            download_pexels_clip("cinematic wildlife", raw_clip, scene_index=idx)
+        # AI इमेज डाउनलोड
+        img_prompt = sc.get("image_prompt", f"cinematic scene of {topic}")
+        ok = download_ai_image(img_prompt, scene_img)
+        if not ok or not os.path.exists(scene_img):
+            download_ai_image(f"mysterious cinematic universe {topic}", scene_img)
 
+        # सबटाइटल
         make_subtitle_png(sub_text, sub_png, width=W, height=H)
 
+        # FFmpeg: इमेज पर स्मूथ सिनेमैटिक 3D ज़ूम मोशन + सबटाइटल ओवरले
+        # fps=24, frames = dur * 24
+        total_frames = int(dur * 24)
+        zoom_filter = (
+            f"[0:v]scale=800:1422,zoompan=z='min(zoom+0.0015,1.25)':d={total_frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={W}x{H}:fps=24[v0];"
+            f"[v0][1:v]overlay=0:0[vout]"
+        )
+
         ff_cmd = (
-            f"ffmpeg -y -t {dur} -stream_loop -1 -i \"{raw_clip}\" -i \"{sub_png}\" -i \"{scene_audio}\" "
-            f"-filter_complex \"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H}[v0];"
-            f"[v0][1:v]overlay=0:0[vout]\" -map \"[vout]\" -map 2:a -r 24 -c:v libx264 -preset ultrafast "
-            f"-bufsize 1024k -threads 1 -c:a aac \"{seg_out}\""
+            f"ffmpeg -y -loop 1 -t {dur} -i \"{scene_img}\" -i \"{sub_png}\" -i \"{scene_audio}\" "
+            f"-filter_complex \"{zoom_filter}\" -map \"[vout]\" -map 2:a -r 24 -c:v libx264 "
+            f"-preset ultrafast -bufsize 1024k -threads 1 -c:a aac \"{seg_out}\""
         )
         subprocess.run(ff_cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if os.path.exists(seg_out):
@@ -269,7 +265,7 @@ async def generate_reel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("कृपया विषय लिखें। उदाहरण: `/reel शेर जंगल का राजा क्यों है`")
         return
 
-    wait_msg = await update.message.reply_text(f"⚡ '{topic}' पर HD रील तैयार की जा रही है...")
+    wait_msg = await update.message.reply_text(f"⚡ AI से '{topic}' पर अल्ट्रा HD रील और सिनेमैटिक विजुअल्स तैयार किए जा रहे हैं...")
     temp_files = []
     try:
         script, video, temp_files = await build_viral_reel(topic)
@@ -277,7 +273,7 @@ async def generate_reel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if os.path.exists(video) and os.path.getsize(video) > 50000:
             with open(video, "rb") as vf:
-                await update.message.reply_video(video=vf, caption=f"🔥 HD रील: {topic}")
+                await update.message.reply_video(video=vf, caption=f"🔥 AI HD रील: {topic}")
         else:
             await update.message.reply_text("⚠️ वीडियो तैयार नहीं हो सका, पुनः प्रयास करें।")
 
@@ -297,7 +293,7 @@ async def generate_reel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👑 Hermes Pro HD Studio सक्रिय है!\n\nकमांड भेजें:\n`/reel <विषय>`")
+    await update.message.reply_text("👑 Hermes Pro AI Studio सक्रिय है!\n\nकमांड भेजें:\n`/reel <विषय>`")
 
 if __name__ == "__main__":
     ensure_assets()
