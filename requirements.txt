@@ -1,8 +1,7 @@
 python-telegram-bot
 google-generativeai
 edge-tts
-asyncio
-moviepy
+moviepy>=1.0.3
 Pillow
 requests
 google-api-python-client
