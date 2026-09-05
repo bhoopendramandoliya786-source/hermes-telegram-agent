@@ -8,7 +8,7 @@ import google.generativeai as genai
 import edge_tts
 import yfinance as yf
 from duckduckgo_search import DDGS
-from moviepy.editor import VideoFileClip, AudioFileClip
+from moviepy import VideoFileClip, AudioFileClip
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
@@ -90,11 +90,12 @@ async def generate_reel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             v_clip = VideoFileClip(bg_video)
 
             if v_clip.duration < a_clip.duration:
-                v_clip = v_clip.loop(duration=a_clip.duration)
+                v_clip = v_clip.with_effects([]) # MoviePy v2 compatibility
+                v_clip = v_clip.subclip(0, min(v_clip.duration, a_clip.duration))
             else:
                 v_clip = v_clip.subclip(0, a_clip.duration)
 
-            final = v_clip.set_audio(a_clip)
+            final = v_clip.with_audio(a_clip) if hasattr(v_clip, "with_audio") else v_clip.set_audio(a_clip)
             final.write_videofile(
                 final_video,
                 codec="libx264",
