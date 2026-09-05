@@ -40,7 +40,7 @@ def download_vertical_video(query):
         res = requests.get(url, headers=headers).json()
         videos = res.get("videos", [])
         if not videos:
-            fallback_url = "https://api.pexels.com/videos/search?query=cinematic+nature&orientation=portrait&per_page=5"
+            fallback_url = "https://api.pexels.com/videos/search?query=nature&orientation=portrait&per_page=5"
             res = requests.get(fallback_url, headers=headers).json()
             videos = res.get("videos", [])
         
@@ -68,8 +68,8 @@ async def generate_reel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     status_msg = await update.message.reply_text("🎬 स्क्रिप्ट तैयार हो रही है और 9:16 HD वीडियो रेंडर हो रहा है...")
     prompt = (
-        f"विषय: '{topic}' पर 25 से 30 सेकंड की एंगेजिंग रील स्क्रिप्ट लिखो। "
-        "सिर्फ स्पष्ट हिंदी वाक्य दो, कोई कैमरा निर्देश या ब्रैकेट न हो।"
+        f"विषय: '{topic}' पर 20 से 25 सेकंड की एंगेजिंग रील स्क्रिप्ट लिखो। "
+        "सिर्फ बोलने वाला स्पष्ट हिंदी वाक्य दो, कोई ब्रैकेट या निर्देश न हो।"
     )
 
     audio_file = "voiceover.mp3"
@@ -89,13 +89,18 @@ async def generate_reel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             a_clip = AudioFileClip(audio_file)
             v_clip = VideoFileClip(bg_video)
 
-            if v_clip.duration < a_clip.duration:
-                v_clip = v_clip.with_effects([]) # MoviePy v2 compatibility
-                v_clip = v_clip.subclip(0, min(v_clip.duration, a_clip.duration))
+            # MoviePy 2.x API Support
+            clip_dur = min(v_clip.duration, a_clip.duration)
+            if hasattr(v_clip, "subclipped"):
+                v_clip = v_clip.subclipped(0, clip_dur)
             else:
-                v_clip = v_clip.subclip(0, a_clip.duration)
+                v_clip = v_clip.subclip(0, clip_dur)
 
-            final = v_clip.with_audio(a_clip) if hasattr(v_clip, "with_audio") else v_clip.set_audio(a_clip)
+            if hasattr(v_clip, "with_audio"):
+                final = v_clip.with_audio(a_clip)
+            else:
+                final = v_clip.set_audio(a_clip)
+
             final.write_videofile(
                 final_video,
                 codec="libx264",
