@@ -1,14 +1,15 @@
 import os
-import asyncio
+import io
+import json
+import random
 import threading
 import requests
-import random
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from PIL import Image, ImageDraw, ImageFont
+import numpy as np
 import google.generativeai as genai
 import edge_tts
-import yfinance as yf
-from duckduckgo_search import DDGS
-from moviepy import VideoFileClip, AudioFileClip
+from moviepy import VideoFileClip, AudioFileClip, ImageClip, concatenate_videoclips, CompositeVideoClip
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
@@ -16,7 +17,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Hermes Video Engine is Running!")
+        self.wfile.write(b"Hermes Pro Video Engine Active")
 
 def run_http_server():
     port = int(os.environ.get("PORT", 10000))
@@ -30,199 +31,169 @@ PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "")
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel("models/gemini-3.6-flash")
 
-def download_vertical_video(query):
+def create_subtitle_image(text, width=1080, height=1920):
+    img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 46)
+    except Exception:
+        font = ImageFont.load_default()
+
+    words = text.split()
+    lines, current_line = [], []
+    for w in words:
+        current_line.append(w)
+        if len(" ".join(current_line)) > 24:
+            lines.append(" ".join(current_line[:-1]))
+            current_line = [w]
+    if current_line:
+        lines.append(" ".join(current_line))
+
+    y_pos = int(height * 0.72)
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=font)
+        text_w = bbox[2] - bbox[0]
+        text_h = bbox[3] - bbox[1]
+        x_pos = (width - text_w) // 2
+
+        pad = 12
+        draw.rectangle(
+            [x_pos - pad, y_pos - pad, x_pos + text_w + pad, y_pos + text_h + pad],
+            fill=(0, 0, 0, 190)
+        )
+        draw.text((x_pos, y_pos), line, fill=(255, 230, 0, 255), font=font)
+        y_pos += text_h + 20
+
+    return np.array(img)
+
+def fetch_pexels_clip(query, target_duration=4):
     if not PEXELS_API_KEY:
         return None
     headers = {"Authorization": PEXELS_API_KEY}
-    url = f"https://api.pexels.com/videos/search?query={query}&orientation=portrait&per_page=6"
-    
+    url = f"https://api.pexels.com/videos/search?query={query}&orientation=portrait&per_page=4"
     try:
-        res = requests.get(url, headers=headers).json()
-        videos = res.get("videos", [])
+        r = requests.get(url, headers=headers, timeout=10).json()
+        videos = r.get("videos", [])
         if not videos:
-            fallback_url = "https://api.pexels.com/videos/search?query=nature&orientation=portrait&per_page=5"
-            res = requests.get(fallback_url, headers=headers).json()
-            videos = res.get("videos", [])
-        
+            url_alt = "https://api.pexels.com/videos/search?query=cinematic+technology&orientation=portrait&per_page=4"
+            videos = requests.get(url_alt, headers=headers, timeout=10).json().get("videos", [])
         if videos:
-            selected_video = random.choice(videos)
-            files = selected_video.get("video_files", [])
-            portrait_files = [f for f in files if f.get("height", 0) > f.get("width", 0)]
-            target = portrait_files[0] if portrait_files else files[0]
-            
-            v_data = requests.get(target["link"], stream=True)
-            bg_path = "bg_clip.mp4"
-            with open(bg_path, "wb") as f:
-                for chunk in v_data.iter_content(chunk_size=1024*1024):
-                    f.write(chunk)
-            return bg_path
-    except Exception as e:
-        print(f"Pexels fetch error: {e}")
+            vid = random.choice(videos)
+            files = [f for f in vid.get("video_files", []) if f.get("height", 0) > f.get("width", 0)]
+            link = files[0]["link"] if files else vid["video_files"][0]["link"]
+            file_name = f"clip_{random.randint(100, 999)}.mp4"
+            with requests.get(link, stream=True, timeout=15) as res:
+                with open(file_name, "wb") as f:
+                    for chunk in res.iter_content(chunk_size=1024 * 512):
+                        f.write(chunk)
+            return file_name
+    except Exception:
+        pass
     return None
+
+async def build_viral_reel(topic):
+    prompt = f"""
+    विषय: '{topic}'
+    यूट्यूब शॉर्ट्स और रील्स के लिए 3 सीन्स का स्ट्रक्चर JSON फॉर्मेट में दो।
+    प्रत्येक सीन 5 से 7 सेकंड का होना चाहिए।
+    आउटपुट केवल यह वैध JSON दें, कोई अतिरिक्त टेक्स्ट न लिखें:
+    {{
+      "full_script": "पूरी 20-25 सेकंड की हिंदी बोलने वाली स्क्रिप्ट",
+      "scenes": [
+        {{"text": "पहला हिंदी हुक वाक्य", "search_term": "visual search query in english"}},
+        {{"text": "दूसरा मुख्य पॉइंट वाक्य", "search_term": "visual search query in english"}},
+        {{"text": "तीसरा निष्कर्ष वाक्य", "search_term": "visual search query in english"}}
+      ]
+    }}
+    """
+    res = model.generate_content(prompt)
+    raw_text = res.text.replace("```json", "").replace("```", "").strip()
+    data = json.loads(raw_text)
+
+    full_script = data["full_script"]
+    scenes = data["scenes"]
+
+    audio_path = "full_voice.mp3"
+    comm = edge_tts.Communicate(full_script, voice="hi-IN-MadhurNeural")
+    await comm.save(audio_path)
+    audio_clip = AudioFileClip(audio_path)
+    total_duration = audio_clip.duration
+    scene_duration = total_duration / len(scenes)
+
+    downloaded_clips = []
+    video_segments = []
+
+    for item in scenes:
+        clip_file = fetch_pexels_clip(item["search_term"], scene_duration)
+        if clip_file and os.path.exists(clip_file):
+            downloaded_clips.append(clip_file)
+            vc = VideoFileClip(clip_file)
+            if hasattr(vc, "subclipped"):
+                vc = vc.subclipped(0, min(vc.duration, scene_duration))
+            else:
+                vc = vc.subclip(0, min(vc.duration, scene_duration))
+            
+            sub_arr = create_subtitle_image(item["text"])
+            txt_clip = ImageClip(sub_arr).with_duration(vc.duration) if hasattr(ImageClip, "with_duration") else ImageClip(sub_arr).set_duration(vc.duration)
+            combined_segment = CompositeVideoClip([vc, txt_clip])
+            video_segments.append(combined_segment)
+
+    final_video = "viral_reel_out.mp4"
+    if video_segments:
+        final_track = concatenate_videoclips(video_segments, method="compose")
+        final_with_audio = final_track.with_audio(audio_clip) if hasattr(final_track, "with_audio") else final_track.set_audio(audio_clip)
+        final_with_audio.write_videofile(
+            final_video,
+            codec="libx264",
+            audio_codec="aac",
+            fps=24,
+            preset="ultrafast",
+            logger=None
+        )
+        final_track.close()
+        final_with_audio.close()
+
+    audio_clip.close()
+    for seg in video_segments:
+        seg.close()
+    for d in downloaded_clips:
+        if os.path.exists(d):
+            os.remove(d)
+
+    return full_script, audio_path, final_video
 
 async def generate_reel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     topic = " ".join(context.args)
     if not topic:
-        await update.message.reply_text("कृपया विषय लिखें। उदाहरण: `/reel सफलता के नियम`")
+        await update.message.reply_text("विषय लिखें। उदाहरण: `/reel ब्लैक होल का सच`")
         return
 
-    status_msg = await update.message.reply_text("🎬 स्क्रिप्ट तैयार हो रही है और 9:16 HD वीडियो रेंडर हो रहा है...")
-    prompt = (
-        f"विषय: '{topic}' पर 20 से 25 सेकंड की एंगेजिंग रील स्क्रिप्ट लिखो। "
-        "सिर्फ बोलने वाला स्पष्ट हिंदी वाक्य दो, कोई ब्रैकेट या निर्देश न हो।"
-    )
-
-    audio_file = "voiceover.mp3"
-    final_video = "final_reel.mp4"
-    bg_video = None
-
+    wait_msg = await update.message.reply_text("⚡ प्रो-क्वालिटी मल्टी-क्लिप और सबटाइटल्स रेंडर हो रहे हैं...")
     try:
-        response = model.generate_content(prompt)
-        script_text = response.text.strip()
+        script, audio, video = await build_viral_reel(topic)
+        await update.message.reply_text(f"📝 *स्क्रिप्ट:*\n\n{script}", parse_mode="Markdown")
 
-        comm = edge_tts.Communicate(script_text, voice="hi-IN-MadhurNeural")
-        await comm.save(audio_file)
-
-        bg_video = download_vertical_video(topic)
-
-        if bg_video and os.path.exists(bg_video):
-            a_clip = AudioFileClip(audio_file)
-            v_clip = VideoFileClip(bg_video)
-
-            # MoviePy 2.x API Support
-            clip_dur = min(v_clip.duration, a_clip.duration)
-            if hasattr(v_clip, "subclipped"):
-                v_clip = v_clip.subclipped(0, clip_dur)
-            else:
-                v_clip = v_clip.subclip(0, clip_dur)
-
-            if hasattr(v_clip, "with_audio"):
-                final = v_clip.with_audio(a_clip)
-            else:
-                final = v_clip.set_audio(a_clip)
-
-            final.write_videofile(
-                final_video,
-                codec="libx264",
-                audio_codec="aac",
-                fps=24,
-                preset="ultrafast",
-                logger=None
-            )
-            v_clip.close()
-            a_clip.close()
-            final.close()
-
-            await update.message.reply_text(f"📝 *स्क्रिप्ट:*\n\n{script_text}", parse_mode="Markdown")
-            with open(final_video, "rb") as vf:
-                await update.message.reply_video(video=vf, caption=f"🔥 रील तैयार: {topic}")
+        if video and os.path.exists(video):
+            with open(video, "rb") as vf:
+                await update.message.reply_video(video=vf, caption=f"🚀 वायरल रील: {topic}")
+            os.remove(video)
         else:
-            await update.message.reply_text(f"📝 *स्क्रिप्ट:*\n\n{script_text}", parse_mode="Markdown")
-            with open(audio_file, "rb") as af:
+            with open(audio, "rb") as af:
                 await update.message.reply_voice(voice=af, caption="🎙️ वॉइसओवर")
 
+        if os.path.exists(audio):
+            os.remove(audio)
     except Exception as e:
         await update.message.reply_text(f"⚠️ एरर: {str(e)}")
     finally:
-        for f in [audio_file, final_video, bg_video, "bg_clip.mp4"]:
-            if f and os.path.exists(f):
-                try:
-                    os.remove(f)
-                except Exception:
-                    pass
-        await status_msg.delete()
-
-async def search_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = " ".join(context.args)
-    if not query:
-        await update.message.reply_text("कृपया सर्च विषय लिखें।")
-        return
-
-    wait_msg = await update.message.reply_text("🔍 वेब रिसर्च जारी है...")
-    try:
-        results = []
-        with DDGS() as ddgs:
-            for r in ddgs.text(query, max_results=4):
-                results.append(f"• {r['title']}: {r['body']}")
-
-        web_data = "\n\n".join(results)
-        summary_prompt = f"इन परिणामों के आधार पर संक्षेप में बुलेट पॉइंट्स में हिंदी समरी दो:\n\n{web_data}"
-        res = model.generate_content(summary_prompt)
-
-        await update.message.reply_text(f"📰 *सर्च रिपोर्ट:*\n\n{res.text}", parse_mode="Markdown")
         await wait_msg.delete()
-    except Exception as e:
-        await update.message.reply_text(f"⚠️ रिसर्च एरर: {str(e)}")
-
-async def stock_market(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    symbol = " ".join(context.args).strip()
-    if not symbol:
-        await update.message.reply_text("स्टॉक सिंबल लिखें। उदाहरण: `/market RELIANCE.NS`")
-        return
-
-    try:
-        ticker = yf.Ticker(symbol)
-        info = ticker.fast_info
-        last_price = round(info.last_price, 2)
-        prev_close = round(info.previous_close, 2)
-        change = round(((last_price - prev_close) / prev_close) * 100, 2)
-
-        res_msg = f"📈 *{symbol.upper()}*\nमूल्य: ₹{last_price}\nपिछला बंद: ₹{prev_close}\nबदलाव: {change}%"
-        await update.message.reply_text(res_msg, parse_mode="Markdown")
-    except Exception as e:
-        await update.message.reply_text("⚠️ सिंबल सही जांचें (जैसे TATAMOTORS.NS)")
-
-async def exam_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    subject = " ".join(context.args)
-    if not subject:
-        await update.message.reply_text("विषय लिखें। उदाहरण: `/quiz भारतीय इतिहास`")
-        return
-
-    wait_msg = await update.message.reply_text("📚 अभ्यास प्रश्न तैयार हो रहे हैं...")
-    prompt = f"विषय: '{subject}' पर 5 MCQs हिंदी में तैयार करो। उत्तर और व्याख्या साथ दो।"
-    try:
-        res = model.generate_content(prompt)
-        await update.message.reply_text(f"📝 *अभ्यास टेस्ट ({subject}):*\n\n{res.text}", parse_mode="Markdown")
-        await wait_msg.delete()
-    except Exception as e:
-        await update.message.reply_text(f"⚠️ एरर: {str(e)}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = (
-        "👑 *Hermes Master AI Agent सक्रिय है!*\n\n"
-        "उपलब्ध कमांड्स:\n"
-        "🔹 `/reel <टॉपिक>` - 9:16 HD वीडियो + वॉइसओवर तैयार करें\n"
-        "🔹 `/news <विषय>` - लाइव इंटरनेट सर्च\n"
-        "🔹 `/market <स्टॉक>` - शेयर बाजार लाइव भाव\n"
-        "🔹 `/quiz <टॉपिक>` - अभ्यास MCQs\n"
-        "🔹 `/status` - सिस्टम हेल्थ चेक\n"
-        "🔹 `/stop` - प्रोसेस रीसेट"
-    )
-    await update.message.reply_text(msg, parse_mode="Markdown")
-
-async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⚡ Hermes AI Engine 24/7 लाइव और रेडी है।")
-
-async def stop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🛑 टास्क रीसेट कर दिया गया है।")
-
-async def handle_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        res = model.generate_content(update.message.text)
-        await update.message.reply_text(res.text)
-    except Exception as e:
-        await update.message.reply_text(f"⚠️ एरर: {str(e)}")
+    await update.message.reply_text("👑 Hermes Pro AI Studio लाइव है!\n\nरील बनाने के लिए भेजें:\n`/reel <कोई भी विषय>`")
 
 if __name__ == "__main__":
     threading.Thread(target=run_http_server, daemon=True).start()
-
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("status", status))
-    app.add_handler(CommandHandler("stop", stop_cmd))
     app.add_handler(CommandHandler("reel", generate_reel))
-    app.add_handler(CommandHandler("news", search_news))
-    app.add_handler(CommandHandler("market", stock_market))
-    app.add_handler(CommandHandler("quiz", exam_quiz))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_chat))
     app.run_polling()
