@@ -4,12 +4,12 @@ import re
 import json
 import random
 import threading
+import subprocess
 import requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from PIL import Image, ImageDraw, ImageFont
 import google.generativeai as genai
 import edge_tts
-from moviepy import VideoFileClip, AudioFileClip, ImageClip, CompositeVideoClip, concatenate_videoclips
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
@@ -45,90 +45,75 @@ def ensure_hindi_font():
 
 def clean_for_speech(text):
     text = re.sub(r'[*_~`#\[\]\(\)\<\>\"\'\\]', ' ', text)
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
+    return re.sub(r'\s+', ' ', text).strip()
 
-def download_pexels_clip(query, duration=5):
+def download_pexels_clip(query, out_filename):
     if not PEXELS_API_KEY:
-        return None
-    headers = {"Authorization": PEXELS_API_KEY}
+        return False
     clean_q = requests.utils.quote(query)
     url = f"https://api.pexels.com/videos/search?query={clean_q}&orientation=portrait&per_page=5"
+    headers = {"Authorization": PEXELS_API_KEY}
     try:
-        res = requests.get(url, headers=headers, timeout=12).json()
+        res = requests.get(url, headers=headers, timeout=10).json()
         videos = res.get("videos", [])
         if not videos:
-            alt_url = "https://api.pexels.com/videos/search?query=cinematic+space&orientation=portrait&per_page=5"
-            videos = requests.get(alt_url, headers=headers, timeout=12).json().get("videos", [])
-        
+            alt_url = "https://api.pexels.com/videos/search?query=cinematic+galaxy&orientation=portrait&per_page=5"
+            videos = requests.get(alt_url, headers=headers, timeout=10).json().get("videos", [])
         if videos:
             vid = random.choice(videos)
             files = [f for f in vid.get("video_files", []) if f.get("height", 0) > f.get("width", 0)]
-            target = files[0] if files else vid["video_files"][0]
-            
-            clip_name = f"clip_{random.randint(100, 999)}.mp4"
-            with requests.get(target["link"], stream=True, timeout=15) as r:
-                with open(clip_name, "wb") as f:
-                    for chunk in r.iter_content(chunk_size=1024*512):
+            target = files[0]["link"] if files else vid["video_files"][0]["link"]
+            with requests.get(target, stream=True, timeout=15) as r:
+                with open(out_filename, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=1024*256):
                         f.write(chunk)
-            return clip_name
+            return True
     except Exception as e:
         print(f"Pexels error: {e}")
-    return None
+    return False
 
-def create_subtitle_clip(text, duration, width=540, height=960):
+def make_subtitle_png(text, png_filename):
     ensure_hindi_font()
-    img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    img = Image.new("RGBA", (540, 960), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-
     try:
-        font = ImageFont.truetype(FONT_PATH, 30)
+        font = ImageFont.truetype(FONT_PATH, 28)
     except Exception:
         font = ImageFont.load_default()
 
     words = clean_for_speech(text).split()
-    lines, current = [], []
+    lines, cur = [], []
     for w in words:
-        current.append(w)
-        if len(" ".join(current)) > 16:
-            lines.append(" ".join(current[:-1]))
-            current = [w]
-    if current:
-        lines.append(" ".join(current))
+        cur.append(w)
+        if len(" ".join(cur)) > 18:
+            lines.append(" ".join(cur[:-1]))
+            cur = [w]
+    if cur:
+        lines.append(" ".join(cur))
 
-    y = int(height * 0.70)
+    y = int(960 * 0.70)
     for line in lines:
         bbox = draw.textbbox((0, 0), line, font=font)
         tw = bbox[2] - bbox[0]
         th = bbox[3] - bbox[1]
-        x = (width - tw) // 2
-
+        x = (540 - tw) // 2
         pad = 8
         draw.rectangle([x - pad, y - pad, x + tw + pad, y + th + pad], fill=(0, 0, 0, 210))
         draw.text((x, y), line, fill=(255, 230, 0, 255), font=font)
         y += th + 12
-
-    img_path = f"sub_{random.randint(100, 999)}.png"
-    img.save(img_path)
-    try:
-        sub_clip = ImageClip(img_path, duration=duration)
-    except Exception:
-        sub_clip = ImageClip(img_path)
-        sub_clip.duration = duration
-    return sub_clip, img_path
+    img.save(png_filename)
 
 async def build_viral_reel(topic):
     prompt = f"""
     Topic: '{topic}'
     YouTube Shorts aur Reels ke liye 3 scenes ka structure JSON me do.
-    Pexels search term English me exact visual ke liye do.
     Output ONLY valid JSON:
     {{
-      "full_script": "20-25 second ki hindi voiceover script",
+      "full_script": "20 second ki Hindi voiceover script",
       "scenes": [
-        {{"text": "Scene 1 Hindi Subtitle", "search": "accurate english query (e.g. space galaxy cinematic)"}},
-        {{"text": "Scene 2 Hindi Subtitle", "search": "accurate english query (e.g. black hole universe)"}},
-        {{"text": "Scene 3 Hindi Subtitle", "search": "accurate english query (e.g. stars cosmic explosion)"}}
+        {{"text": "Scene 1 Subtitle", "search": "space galaxy cinematic"}},
+        {{"text": "Scene 2 Subtitle", "search": "black hole cosmic"}},
+        {{"text": "Scene 3 Subtitle", "search": "stars nebula cinematic"}}
       ]
     }}
     """
@@ -137,80 +122,82 @@ async def build_viral_reel(topic):
     match = re.search(r'\{.*\}', raw, re.DOTALL)
     data = json.loads(match.group(0)) if match else json.loads(raw)
 
-    full_script = data.get("full_script", f"{topic} के बारे में जानिए।")
+    full_script = data.get("full_script", f"{topic} के बारे में रोचक तथ्य।")
     scenes = data.get("scenes", [])
 
-    audio_path = "voiceover.mp3"
+    audio_file = "voice.mp3"
     comm = edge_tts.Communicate(clean_for_speech(full_script), voice="hi-IN-MadhurNeural")
-    await comm.save(audio_path)
+    await comm.save(audio_file)
 
-    audio_clip = AudioFileClip(audio_path)
-    total_dur = max(6.0, audio_clip.duration)
-    scene_dur = total_dur / len(scenes)
+    # Get audio duration using ffprobe (Zero RAM usage)
+    probe_cmd = f"ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 {audio_file}"
+    try:
+        dur_out = subprocess.check_output(probe_cmd, shell=True).decode().strip()
+        total_dur = max(6.0, float(dur_out))
+    except Exception:
+        total_dur = 20.0
 
-    video_segments = []
-    temp_files = [audio_path]
+    scene_dur = round(total_dur / max(1, len(scenes)), 2)
+    rendered_segments = []
+    temp_files = [audio_file]
 
-    for sc in scenes:
-        clip_file = download_pexels_clip(sc.get("search", topic), scene_dur)
-        if not clip_file or not os.path.exists(clip_file):
-            clip_file = download_pexels_clip("universe", scene_dur)
+    for idx, sc in enumerate(scenes):
+        raw_clip = f"raw_{idx}.mp4"
+        sub_png = f"sub_{idx}.png"
+        seg_out = f"seg_{idx}.mp4"
+        temp_files.extend([raw_clip, sub_png, seg_out])
 
-        if clip_file and os.path.exists(clip_file):
-            temp_files.append(clip_file)
-            vc = VideoFileClip(clip_file)
-            
-            # Subclip safe call
-            clip_dur = min(vc.duration, scene_dur)
-            vc = vc.subclipped(0, clip_dur) if hasattr(vc, "subclipped") else vc.subclip(0, clip_dur)
-            vc = vc.resized(newsize=(540, 960)) if hasattr(vc, "resized") else vc.resize((540, 960))
+        ok = download_pexels_clip(sc.get("search", topic), raw_clip)
+        if not ok or not os.path.exists(raw_clip):
+            download_pexels_clip("cinematic space", raw_clip)
 
-            sub_clip, sub_img = create_subtitle_clip(sc.get("text", ""), vc.duration)
-            temp_files.append(sub_img)
+        make_subtitle_png(sc.get("text", ""), sub_png)
 
-            combined = CompositeVideoClip([vc, sub_clip])
-            video_segments.append(combined)
+        # Ultra-lightweight FFmpeg overlay (max 50 MB RAM)
+        ff_cmd = (
+            f"ffmpeg -y -t {scene_dur} -i {raw_clip} -i {sub_png} "
+            f"-filter_complex \"[0:v]scale=540:960:force_original_aspect_ratio=increase,crop=540:960[v0];"
+            f"[v0][1:v]overlay=0:0[vout]\" -map \"[vout]\" -r 24 -c:v libx264 -preset ultrafast "
+            f"-threads 1 -an {seg_out}"
+        )
+        subprocess.run(ff_cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if os.path.exists(seg_out):
+            rendered_segments.append(seg_out)
 
-    final_out = "viral_reel_out.mp4"
-    temp_files.append(final_out)
+    # Concatenate clips and merge audio via FFmpeg
+    concat_list = "concat_list.txt"
+    temp_files.append(concat_list)
+    with open(concat_list, "w") as f:
+        for seg in rendered_segments:
+            f.write(f"file '{os.path.abspath(seg)}'\n")
 
-    final_track = concatenate_videoclips(video_segments, method="compose")
-    final_with_audio = final_track.with_audio(audio_clip) if hasattr(final_track, "with_audio") else final_track.set_audio(audio_clip)
+    final_video = "viral_reel.mp4"
+    temp_files.append(final_video)
 
-    final_with_audio.write_videofile(
-        final_out,
-        fps=20,
-        codec="libx264",
-        audio_codec="aac",
-        preset="ultrafast",
-        threads=1,
-        logger=None
+    merge_cmd = (
+        f"ffmpeg -y -f concat -safe 0 -i {concat_list} -i {audio_file} "
+        f"-c:v copy -c:a aac -shortest {final_video}"
     )
-
-    audio_clip.close()
-    final_track.close()
-    final_with_audio.close()
-    for seg in video_segments:
-        seg.close()
-
+    subprocess.run(merge_cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     gc.collect()
-    return full_script, audio_path, final_out, temp_files
+
+    return full_script, audio_file, final_video, temp_files
 
 async def generate_reel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    topic = " ".join(context.args)
+    topic = clean_for_speech(" ".join(context.args))
     if not topic:
         await update.message.reply_text("कृपया विषय लिखें। उदाहरण: `/reel अंतरिक्ष के रहस्य`")
         return
 
-    wait_msg = await update.message.reply_text("⚡ HD विजुअल्स और हिंदी सबटाइटल्स सिंक हो रहे हैं...")
+    wait_msg = await update.message.reply_text("⚡ FFmpeg इंजन से बिना मेमोरी लोड के रील रेंडर हो रही है...")
     temp_files = []
     try:
         script, audio, video, temp_files = await build_viral_reel(topic)
         await update.message.reply_text(f"📝 *स्क्रिप्ट:*\n\n{script}", parse_mode="Markdown")
 
-        if os.path.exists(video):
+        if os.path.exists(video) and os.path.getsize(video) > 5000:
             with open(video, "rb") as vf:
-                await update.message.reply_video(video=vf, caption=f"🔥 रील: {topic}")
+                await update.message.reply_video(video=vf, caption=f"🔥 रील तैयार: {topic}")
         else:
             with open(audio, "rb") as af:
                 await update.message.reply_voice(voice=af, caption="🎙️ वॉइसओवर")
@@ -228,7 +215,7 @@ async def generate_reel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await wait_msg.delete()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👑 Hermes Video Engine सक्रिय है!\n\nरील बनाने के लिए लिखें:\n`/reel <विषय>`")
+    await update.message.reply_text("👑 Hermes Pro AI Studio सक्रिय है!\n\nरील बनाने के लिए लिखें:\n`/reel <विषय>`")
 
 if __name__ == "__main__":
     ensure_hindi_font()
