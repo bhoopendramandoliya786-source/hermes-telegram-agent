@@ -17,7 +17,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Hermes Video Engine 720p Pro Running")
+        self.wfile.write(b"Hermes Video Engine Running")
 
 def run_http_server():
     port = int(os.environ.get("PORT", 10000))
@@ -30,20 +30,20 @@ PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "")
 
 genai.configure(api_key=GEMINI_API_KEY)
 
-# High Quota Free Models (1,500 req/day)
-MODELS_TO_TRY = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+# आधिकारिक हाई-कोटा मॉडल्स
+MODELS_TO_TRY = ["gemini-1.5-flash", "gemini-1.5-flash-8b", "gemini-1.5-pro"]
 
 def generate_script_safe(prompt):
     for m_name in MODELS_TO_TRY:
         try:
             m = genai.GenerativeModel(m_name)
             res = m.generate_content(prompt)
-            if res.text:
+            if res and res.text:
                 return res.text
         except Exception as e:
-            print(f"Model {m_name} rate limited/error: {e}")
+            print(f"Model {m_name} failed: {e}")
             continue
-    raise Exception("सभी Gemini मॉडल्स की लिमिट पूरी हो गई है। कृपया 1 मिनट बाद प्रयास करें।")
+    raise Exception("सभी Gemini मॉडल्स की लिमिट पूरी हो गई है। कृपया नई API Key डालें या थोड़ी देर बाद प्रयास करें।")
 
 FONT_PATH = "hindi_font.ttf"
 BGM_PATH = "bgm.mp3"
@@ -85,17 +85,16 @@ def download_pexels_clip(query, out_filename, scene_index=0):
     if not PEXELS_API_KEY:
         return False
     clean_q = requests.utils.quote(query)
-    url = f"https://api.pexels.com/videos/search?query={clean_q}&orientation=portrait&per_page=10"
+    url = f"https://api.pexels.com/videos/search?query={clean_q}&orientation=portrait&per_page=8"
     headers = {"Authorization": PEXELS_API_KEY}
     try:
         res = requests.get(url, headers=headers, timeout=12).json()
         videos = res.get("videos", [])
         if not videos:
-            alt_url = f"https://api.pexels.com/videos/search?query=space+stars+galaxy&orientation=portrait&per_page=10"
+            alt_url = "https://api.pexels.com/videos/search?query=cinematic+sad+alone&orientation=portrait&per_page=8"
             videos = requests.get(alt_url, headers=headers, timeout=12).json().get("videos", [])
         
         if videos:
-            # Har scene ke liye alag clip select karna
             chosen_vid = videos[scene_index % len(videos)]
             files = [f for f in chosen_vid.get("video_files", []) if f.get("height", 0) > f.get("width", 0)]
             target = files[0]["link"] if files else chosen_vid["video_files"][0]["link"]
@@ -127,7 +126,6 @@ def make_subtitle_png(text, png_filename, width=720, height=1280):
     if cur:
         lines.append(" ".join(cur))
 
-    # Clean bottom overlay
     y = int(height * 0.74)
     for line in lines:
         bbox = draw.textbbox((0, 0), line, font=font)
@@ -145,13 +143,13 @@ async def build_viral_reel(topic):
     prompt = f"""
     Topic: '{topic}'
     YouTube Shorts aur Instagram Reels ke liye viral 3 scenes ka structure valid JSON format me do.
-    Har scene me speech aur Pexels ke liye specific alag-alag visual search term do.
+    Har scene me speech sentence aur Pexels ke liye alag specific visual search term do.
     Output ONLY valid JSON:
     {{
       "scenes": [
-        {{"speech": "पहला चौंकाने वाला हुक वाक्य", "sub": "छोटा सबटाइटल", "search": "accurate english query 1"}},
-        {{"speech": "दूसरा मुख्य रोचक तथ्य वाक्य", "sub": "छोटा सबटाइटल", "search": "accurate english query 2"}},
-        {{"speech": "तीसरा निष्कर्ष और ऐसी ही जानकारी के लिए अभी फॉलो करें", "sub": "फॉलो करना न भूलें", "search": "accurate english query 3"}}
+        {{"speech": "पहला हुक वाक्य", "sub": "छोटा सबटाइटल", "search": "accurate english query 1"}},
+        {{"speech": "दूसरा मुख्य वाक्य", "sub": "छोटा सबटाइटल", "search": "accurate english query 2"}},
+        {{"speech": "तीसरा निष्कर्ष वाक्य", "sub": "अभी फॉलो करें", "search": "accurate english query 3"}}
       ]
     }}
     """
@@ -162,9 +160,9 @@ async def build_viral_reel(topic):
     scenes = data.get("scenes", [])
     if len(scenes) < 2:
         scenes = [
-            {"speech": f"क्या आप जानते हैं {topic} के बारे में?", "sub": f"{topic} का सच", "search": "deep space galaxy"},
-            {"speech": "यह रहस्य आपको हैरान कर देगा।", "sub": "हैरान करने वाला सच", "search": "nebula stars motion"},
-            {"speech": "ऐसी ही जानकारी के लिए अभी फॉलो करें।", "sub": "अभी फॉलो करें", "search": "earth from space"}
+            {"speech": f"क्या आप जानते हैं {topic} के बारे में?", "sub": f"{topic}", "search": "sad alone cinematic"},
+            {"speech": "यह अहसास हर इंसान की जिंदगी में कभी न कभी आता है।", "sub": "मन की शांति", "search": "walking in rain cinematic"},
+            {"speech": "ऐसी ही बातों के लिए अभी फॉलो करें।", "sub": "अभी फॉलो करें", "search": "sunset nature hope"}
         ]
 
     rendered_segments = []
@@ -186,14 +184,13 @@ async def build_viral_reel(topic):
         await comm.save(scene_audio)
         dur = get_file_duration(scene_audio)
 
-        # Unique clip download per scene
         ok = download_pexels_clip(sc.get("search", topic), raw_clip, scene_index=idx)
         if not ok or not os.path.exists(raw_clip):
-            download_pexels_clip("cinematic space", raw_clip, scene_index=idx)
+            download_pexels_clip("cinematic emotion", raw_clip, scene_index=idx)
 
         make_subtitle_png(sub_text, sub_png, width=720, height=1280)
 
-        # FFmpeg Low-Memory 720p Render
+        # 720p HD Low Memory Encoding
         ff_cmd = (
             f"ffmpeg -y -t {dur} -stream_loop -1 -i \"{raw_clip}\" -i \"{sub_png}\" -i \"{scene_audio}\" "
             f"-filter_complex \"[0:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280[v0];"
