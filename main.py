@@ -17,7 +17,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Hermes HD Video Engine Running")
+        self.wfile.write(b"Hermes HD 720p Running")
 
 def run_http_server():
     port = int(os.environ.get("PORT", 10000))
@@ -71,13 +71,13 @@ def download_pexels_clip(query, out_filename):
     if not PEXELS_API_KEY:
         return False
     clean_q = requests.utils.quote(query)
-    url = f"https://api.pexels.com/videos/search?query={clean_q}&orientation=portrait&per_page=6"
+    url = f"https://api.pexels.com/videos/search?query={clean_q}&orientation=portrait&per_page=5"
     headers = {"Authorization": PEXELS_API_KEY}
     try:
         res = requests.get(url, headers=headers, timeout=12).json()
         videos = res.get("videos", [])
         if not videos:
-            alt_url = "https://api.pexels.com/videos/search?query=cinematic+luxury+nature&orientation=portrait&per_page=6"
+            alt_url = "https://api.pexels.com/videos/search?query=cinematic+luxury+nature&orientation=portrait&per_page=5"
             videos = requests.get(alt_url, headers=headers, timeout=12).json().get("videos", [])
         if videos:
             vid = random.choice(videos)
@@ -85,19 +85,19 @@ def download_pexels_clip(query, out_filename):
             target = files[0]["link"] if files else vid["video_files"][0]["link"]
             with requests.get(target, stream=True, timeout=20) as r:
                 with open(out_filename, "wb") as f:
-                    for chunk in r.iter_content(chunk_size=1024*512):
+                    for chunk in r.iter_content(chunk_size=1024*256):
                         f.write(chunk)
             return True
     except Exception as e:
         print(f"Pexels error: {e}")
     return False
 
-def make_subtitle_png(text, png_filename, width=1080, height=1920):
+def make_subtitle_png(text, png_filename, width=720, height=1280):
     ensure_assets()
     img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     try:
-        font = ImageFont.truetype(FONT_PATH, 56)
+        font = ImageFont.truetype(FONT_PATH, 40)
     except Exception:
         font = ImageFont.load_default()
 
@@ -117,23 +117,23 @@ def make_subtitle_png(text, png_filename, width=1080, height=1920):
         tw = bbox[2] - bbox[0]
         th = bbox[3] - bbox[1]
         x = (width - tw) // 2
-        pad = 16
+        pad = 12
         draw.rectangle([x - pad, y - pad, x + tw + pad, y + th + pad], fill=(0, 0, 0, 210))
         draw.text((x, y), line, fill=(255, 230, 0, 255), font=font)
-        y += th + 24
+        y += th + 18
     img.save(png_filename)
+    img.close()
 
 async def build_viral_reel(topic):
     prompt = f"""
     Topic: '{topic}'
     YouTube Shorts/Reels ke liye exactly 3 scenes ka structure JSON me do.
-    Har scene ka Hindi speech sentence aur uska accurate visual search query do.
     Output ONLY valid JSON:
     {{
       "scenes": [
-        {{"speech": "पहला आकर्षक हुक वाक्य", "search": "accurate english query (e.g. intense gym workout dumbbell)"}},
-        {{"text_overlay": "पहला बोल्ड सबटाइटल", "speech": "दूसरा मुख्य पॉइंट वाक्य", "search": "accurate english query (e.g. running athlete cinematic)"}},
-        {{"text_overlay": "दूसरा बोल्ड सबटाइटल", "speech": "तीसरा निष्कर्ष वाक्य", "search": "accurate english query (e.g. champion victory fitness)"}}
+        {{"speech": "पहला आकर्षक हुक वाक्य", "search": "accurate english query (e.g. intense gym workout)"}},
+        {{"text_overlay": "पहला सबटाइटल", "speech": "दूसरा मुख्य पॉइंट वाक्य", "search": "accurate english query (e.g. fitness training)"}},
+        {{"text_overlay": "दूसरा सबटाइटल", "speech": "तीसरा निष्कर्ष वाक्य", "search": "accurate english query (e.g. champion athlete)"}}
       ]
     }}
     """
@@ -146,8 +146,8 @@ async def build_viral_reel(topic):
     if len(scenes) < 2:
         scenes = [
             {"speech": f"क्या आप जानते हैं {topic} के बारे में?", "search": "cinematic dramatic"},
-            {"speech": "यह जानकारी आपकी सोच बदल कर रख देगी।", "search": "universe stars space"},
-            {"speech": "ऐसी ही काम की बातों के लिए अभी सब्सक्राइब करें।", "search": "sunset motivation cinematic"}
+            {"speech": "यह जानकारी आपकी सोच बदल कर रख देगी।", "search": "universe space"},
+            {"speech": "ऐसी ही काम की बातों के लिए अभी फॉलो करें।", "search": "nature cinematic"}
         ]
 
     rendered_segments = []
@@ -173,14 +173,14 @@ async def build_viral_reel(topic):
         if not ok or not os.path.exists(raw_clip):
             download_pexels_clip("cinematic", raw_clip)
 
-        make_subtitle_png(sub_text, sub_png, width=1080, height=1920)
+        make_subtitle_png(sub_text, sub_png, width=720, height=1280)
 
-        # 1080p Full HD Encoding with exact audio-synced duration
+        # 720p HD with strict memory constraints (threads=1, bufsize=1024k)
         ff_cmd = (
             f"ffmpeg -y -t {dur} -stream_loop -1 -i \"{raw_clip}\" -i \"{sub_png}\" -i \"{scene_audio}\" "
-            f"-filter_complex \"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920[v0];"
-            f"[v0][1:v]overlay=0:0[vout]\" -map \"[vout]\" -map 2:a -r 30 -c:v libx264 -preset veryfast "
-            f"-crf 22 -c:a aac -threads 1 \"{seg_out}\""
+            f"-filter_complex \"[0:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280[v0];"
+            f"[v0][1:v]overlay=0:0[vout]\" -map \"[vout]\" -map 2:a -r 24 -c:v libx264 -preset ultrafast "
+            f"-bufsize 1024k -threads 1 -c:a aac \"{seg_out}\""
         )
         subprocess.run(ff_cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if os.path.exists(seg_out):
@@ -201,7 +201,6 @@ async def build_viral_reel(topic):
         shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
 
-    # Mix 12% BGM for viral cinematic vibe
     ensure_assets()
     if os.path.exists(BGM_PATH):
         mix_cmd = (
@@ -223,7 +222,7 @@ async def generate_reel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("कृपया विषय लिखें। उदाहरण: `/reel बॉडी बनाने के 3 नियम`")
         return
 
-    wait_msg = await update.message.reply_text("🎬 1080p Full HD वीडियो + सिंक सबटाइटल्स + BGM तैयार हो रहा है...")
+    wait_msg = await update.message.reply_text("🎬 720p HD रील + सिंक सबटाइटल्स + BGM तैयार हो रहा है...")
     temp_files = []
     try:
         script, video, temp_files = await build_viral_reel(topic)
@@ -231,7 +230,7 @@ async def generate_reel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if os.path.exists(video) and os.path.getsize(video) > 50000:
             with open(video, "rb") as vf:
-                await update.message.reply_video(video=vf, caption=f"🔥 1080p HD रील: {topic}")
+                await update.message.reply_video(video=vf, caption=f"🔥 HD रील: {topic}")
         else:
             await update.message.reply_text("⚠️ वीडियो रेंडर नहीं हो सकी, पुनः प्रयास करें।")
 
@@ -248,7 +247,7 @@ async def generate_reel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await wait_msg.delete()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👑 Hermes Pro HD Studio सक्रिय है!\n\nकमांड भेजें:\n`/reel <विषय>`")
+    await update.message.reply_text("👑 Hermes 720p HD Studio सक्रिय है!\n\nकमांड भेजें:\n`/reel <विषय>`")
 
 if __name__ == "__main__":
     ensure_assets()
