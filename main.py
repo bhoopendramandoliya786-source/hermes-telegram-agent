@@ -1,5 +1,6 @@
 import os
 import gc
+import re
 import json
 import random
 import threading
@@ -17,7 +18,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Hermes AI Studio Active")
+        self.wfile.write(b"Hermes AI Studio Running")
 
 def run_http_server():
     port = int(os.environ.get("PORT", 10000))
@@ -30,18 +31,45 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel("models/gemini-3.6-flash")
 
-def download_ai_image(prompt_desc, filename):
-    clean_prompt = f"cinematic dramatic 8k vertical portrait: {prompt_desc}"
-    encoded = urllib.parse.quote(clean_prompt)
-    url = f"https://image.pollinations.ai/prompt/{encoded}?width=540&height=960&nologo=true&seed={random.randint(1, 99999)}"
+def clean_for_speech(text):
+    text = re.sub(r'[*_~`#\[\]\(\)\<\>\"\'\\]', ' ', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+async def generate_speech_safe(text, output_file):
+    clean_text = clean_for_speech(text)
+    if not clean_text:
+        clean_text = "नमस्ते, यह एक अद्भुत जानकारी है।"
+
     try:
-        r = requests.get(url, timeout=25)
-        if r.status_code == 200:
+        comm = edge_tts.Communicate(clean_text, voice="hi-IN-MadhurNeural")
+        await comm.save(output_file)
+        if os.path.exists(output_file) and os.path.getsize(output_file) > 1000:
+            return True
+    except Exception as e:
+        print(f"Primary voice error: {e}")
+
+    # Fallback Voice
+    try:
+        comm = edge_tts.Communicate(clean_text, voice="hi-IN-SwaraNeural")
+        await comm.save(output_file)
+        return os.path.exists(output_file) and os.path.getsize(output_file) > 1000
+    except Exception as e:
+        print(f"Fallback voice error: {e}")
+        return False
+
+def download_ai_image(prompt_desc, filename):
+    clean_prompt = f"cinematic 8k hyperrealistic vertical portrait photo: {prompt_desc}"
+    encoded = urllib.parse.quote(clean_prompt)
+    url = f"[https://image.pollinations.ai/prompt/](https://image.pollinations.ai/prompt/){encoded}?width=540&height=960&nologo=true&seed={random.randint(1, 99999)}"
+    try:
+        r = requests.get(url, timeout=20)
+        if r.status_code == 200 and len(r.content) > 5000:
             with open(filename, "wb") as f:
                 f.write(r.content)
             return True
     except Exception as e:
-        print(f"Image generation error: {e}")
+        print(f"Pollinations error: {e}")
     return False
 
 def add_subtitles_to_image(img_path, subtitle_text):
@@ -55,17 +83,17 @@ def add_subtitles_to_image(img_path, subtitle_text):
     except Exception:
         font = ImageFont.load_default()
 
-    words = subtitle_text.split()
+    words = clean_for_speech(subtitle_text).split()
     lines, current = [], []
     for word in words:
         current.append(word)
-        if len(" ".join(current)) > 20:
+        if len(" ".join(current)) > 18:
             lines.append(" ".join(current[:-1]))
             current = [word]
     if current:
         lines.append(" ".join(current))
 
-    y = int(h * 0.70)
+    y = int(h * 0.68)
     for line in lines:
         bbox = draw.textbbox((0, 0), line, font=font)
         tw = bbox[2] - bbox[0]
@@ -85,31 +113,41 @@ def add_subtitles_to_image(img_path, subtitle_text):
 async def build_viral_reel(topic):
     prompt = f"""
     Topic: '{topic}'
-    Give 3 scenes structure in JSON for YouTube Shorts/Reels.
-    Output ONLY valid JSON:
+    यूट्यूब शॉर्ट्स और रील्स के लिए 3 सीन्स का स्ट्रक्चर JSON में दो। 
+    आउटपुट केवल शुद्ध JSON होना चाहिए, कोई भी बैकविक्स या अतिरिक्त शब्द न लिखें:
     {{
-      "full_script": "20 second ki Hindi voiceover script bina kisi bracket ke",
+      "full_script": "20 सेकंड की हिंदी बोलने वाली स्क्रिप्ट",
       "scenes": [
-        {{"text": "Scene 1 Hindi Subtitle", "image_prompt": "cinematic hyperrealistic subject in english"}},
-        {{"text": "Scene 2 Hindi Subtitle", "image_prompt": "cinematic hyperrealistic subject in english"}},
-        {{"text": "Scene 3 Hindi Subtitle", "image_prompt": "cinematic hyperrealistic subject in english"}}
+        {{"text": "पहला हिंदी सबटाइटल", "image_prompt": "cinematic hyperrealistic subject in english"}},
+        {{"text": "दूसरा हिंदी सबटाइटल", "image_prompt": "cinematic hyperrealistic subject in english"}},
+        {{"text": "तीसरा हिंदी सबटाइटल", "image_prompt": "cinematic hyperrealistic subject in english"}}
       ]
     }}
     """
     res = model.generate_content(prompt)
     raw = res.text.replace("```json", "").replace("```", "").strip()
-    data = json.loads(raw)
+    
+    match = re.search(r'\{.*\}', raw, re.DOTALL)
+    if match:
+        data = json.loads(match.group(0))
+    else:
+        data = json.loads(raw)
 
-    full_script = data["full_script"]
-    scenes = data["scenes"]
+    full_script = data.get("full_script", f"{topic} के बारे में यह जानकारी आपको हैरान कर देगी।")
+    scenes = data.get("scenes", [
+        {"text": topic, "image_prompt": f"cinematic {topic}"},
+        {"text": "यह सच आपको चौंका देगा", "image_prompt": "shocking revelation mystery cinematic"},
+        {"text": "फॉलो करना न भूलें", "image_prompt": "epic victory landscape cinematic"}
+    ])
 
     audio_path = "voiceover.mp3"
-    comm = edge_tts.Communicate(full_script, voice="hi-IN-MadhurNeural")
-    await comm.save(audio_path)
+    speech_ok = await generate_speech_safe(full_script, audio_path)
+    if not speech_ok:
+        raise Exception("Edge-TTS वॉइसओवर जनरेट नहीं हो सका।")
 
     audio_clip = AudioFileClip(audio_path)
-    total_dur = audio_clip.duration
-    scene_dur = max(3.0, total_dur / len(scenes))
+    total_dur = max(6.0, audio_clip.duration)
+    scene_dur = total_dur / len(scenes)
 
     video_clips = []
     temp_files = [audio_path]
@@ -117,13 +155,13 @@ async def build_viral_reel(topic):
     for idx, sc in enumerate(scenes):
         img_name = f"scene_{idx}.jpg"
         temp_files.append(img_name)
-        ok = download_ai_image(sc["image_prompt"], img_name)
+        ok = download_ai_image(sc.get("image_prompt", topic), img_name)
         
         if not ok or not os.path.exists(img_name):
-            img = Image.new("RGB", (540, 960), color=(20, 20, 30))
+            img = Image.new("RGB", (540, 960), color=(15, 20, 30))
             img.save(img_name)
 
-        add_subtitles_to_image(img_name, sc["text"])
+        add_subtitles_to_image(img_name, sc.get("text", ""))
         
         try:
             ic = ImageClip(img_name, duration=scene_dur)
@@ -164,10 +202,10 @@ async def build_viral_reel(topic):
 async def generate_reel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     topic = " ".join(context.args)
     if not topic:
-        await update.message.reply_text("कृपया विषय लिखें। उदाहरण: `/reel समय यात्रा का सच`")
+        await update.message.reply_text("कृपया विषय लिखें। उदाहरण: `/reel अंतरिक्ष के 3 रहस्य`")
         return
 
-    wait_msg = await update.message.reply_text("🎨 AI दृश्य और सबटाइटल तैयार हो रहे हैं...")
+    wait_msg = await update.message.reply_text("⚡ AI विजुअल्स, वॉइसओवर और सबटाइटल तैयार हो रहे हैं...")
     temp_files = []
     try:
         script, audio, video, temp_files = await build_viral_reel(topic)
@@ -193,7 +231,7 @@ async def generate_reel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await wait_msg.delete()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👑 Hermes AI Studio सक्रिय है!\n\nकमांड भेजें:\n`/reel <विषय>`")
+    await update.message.reply_text("👑 Hermes Pro AI Studio लाइव है!\n\nरील बनाने के लिए लिखें:\n`/reel <विषय>`")
 
 if __name__ == "__main__":
     threading.Thread(target=run_http_server, daemon=True).start()
