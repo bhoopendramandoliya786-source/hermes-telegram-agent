@@ -32,7 +32,7 @@ def ensure_assets():
     if not os.path.exists(FONT_PATH) or os.path.getsize(FONT_PATH) < 10000:
         font_url = "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSansDevanagari/NotoSansDevanagari-Bold.ttf"
         try:
-            r = requests.get(font_url, timeout=20)
+            r = requests.get(font_url, timeout=15)
             if r.status_code == 200:
                 with open(FONT_PATH, "wb") as f:
                     f.write(r.content)
@@ -42,7 +42,7 @@ def ensure_assets():
     if not os.path.exists(BGM_PATH) or os.path.getsize(BGM_PATH) < 5000:
         bgm_url = "https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3?filename=ambient-cinematic-112282.mp3"
         try:
-            r = requests.get(bgm_url, timeout=20)
+            r = requests.get(bgm_url, timeout=15)
             if r.status_code == 200:
                 with open(BGM_PATH, "wb") as f:
                     f.write(r.content)
@@ -68,21 +68,18 @@ def generate_script_safe(raw_topic):
             "x-goog-api-key": GEMINI_API_KEY
         }
         prompt = f"""
-You are a viral YouTube Shorts / Reels creator.
-Topic: '{topic}'
-
-Generate an awesome 3-scene Hindi video script specifically about '{topic}'.
-For each scene provide:
-- 'speech': 1 single compelling Hindi sentence explaining a specific fact about '{topic}'.
-- 'sub': 2-3 short Hindi words for subtitle.
-- 'image_prompt': A highly detailed, realistic, cinematic 8k description in English for AI image generation (e.g., 'majestic lion roaring on a rocky cliff in african savannah at sunset, photorealistic, 8k, dramatic lighting').
+Create a viral 3-scene YouTube Shorts / Reels script in Hindi about: '{topic}'.
+Requirements:
+- scene 1: Hook sentence in Hindi + short subtitle + detailed English visual prompt for AI image generator matching '{topic}'.
+- scene 2: Main core fact sentence in Hindi + short subtitle + detailed English visual prompt.
+- scene 3: Closing sentence in Hindi + short subtitle + dramatic closing visual prompt.
 
 Return ONLY valid JSON:
 {{
   "scenes": [
-    {{"speech": "पहला दृश्य वाक्य हिंदी में", "sub": "संक्षिप्त सबटाइटल", "image_prompt": "detailed english prompt 1"}},
-    {{"speech": "दूसरा दृश्य वाक्य हिंदी में", "sub": "संक्षिप्त सबटाइटल", "image_prompt": "detailed english prompt 2"}},
-    {{"speech": "तीसरा दृश्य वाक्य हिंदी में", "sub": "फॉलो करें", "image_prompt": "detailed english prompt 3"}}
+    {{"speech": "पहला वाक्य हिंदी में", "sub": "संक्षिप्त सबटाइटल", "image_prompt": "cinematic photorealistic english description"}},
+    {{"speech": "दूसरा वाक्य हिंदी में", "sub": "संक्षिप्त सबटाइटल", "image_prompt": "cinematic photorealistic english description"}},
+    {{"speech": "तीसरा वाक्य हिंदी में", "sub": "फॉलो करें", "image_prompt": "cinematic photorealistic english description"}}
   ]
 }}
 """
@@ -97,7 +94,7 @@ Return ONLY valid JSON:
         for m in models:
             try:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent"
-                res = requests.post(url, headers=headers, json=payload, timeout=14)
+                res = requests.post(url, headers=headers, json=payload, timeout=10)
                 if res.status_code == 200:
                     data = res.json()
                     out_text = data['candidates'][0]['content']['parts'][0]['text']
@@ -107,15 +104,15 @@ Return ONLY valid JSON:
                         if "scenes" in parsed and len(parsed["scenes"]) >= 3:
                             return parsed["scenes"]
             except Exception as e:
-                print(f"Gemini API error on {m}: {e}")
+                print(f"Gemini {m} error: {e}")
                 continue
 
     # ऑटो फॉलबैक
-    en_query = re.sub(r'[^a-zA-Z0-9\s]', '', topic).strip() or "majestic cinematic wonder"
+    en = re.sub(r'[^a-zA-Z0-9\s]', '', topic).strip() or "epic discovery"
     return [
-        {"speech": f"क्या आप जानते हैं {topic} से जुड़ी यह सबसे बड़ी बात?", "sub": "अनोखा सच", "image_prompt": f"cinematic detailed masterpiece of {en_query}, 8k, dramatic lighting, photorealistic"},
-        {"speech": f"इसके पीछे कई ऐसे रहस्य हैं जो हर किसी को हैरान कर देते हैं।", "sub": "गहरा रहस्य", "image_prompt": f"epic visual representation of {en_query}, hyper realistic, cinematic atmosphere, 8k"},
-        {"speech": "ऐसी ही रोचक जानकारियों के लिए हमें अभी फॉलो और सब्सक्राइब करें।", "sub": "अभी फॉलो करें", "image_prompt": f"breathtaking scene related to {en_query}, inspirational sunrise, 8k"}
+        {"speech": f"क्या आप जानते हैं {topic} के बारे में यह अनोखा सच?", "sub": "अनोखा सच", "image_prompt": f"hyperrealistic cinematic scene of {en}, dramatic cinematic lighting, 8k"},
+        {"speech": f"इसके पीछे की कहानी और तथ्य वाकई चौंका देने वाले हैं।", "sub": "हैरान करने वाला तथ्य", "image_prompt": f"detailed close-up cinematic shot of {en}, masterpiece, vivid"},
+        {"speech": "ऐसी ही ज्ञानवर्धक जानकारियों के लिए हमें अभी फॉलो करें।", "sub": "अभी फॉलो करें", "image_prompt": f"epic majestic atmospheric shot of {en}, beautiful lighting"}
     ]
 
 def get_file_duration(file_path):
@@ -124,20 +121,20 @@ def get_file_duration(file_path):
         out = subprocess.check_output(cmd, shell=True).decode().strip()
         return max(2.5, float(out))
     except Exception:
-        return 4.5
+        return 4.0
 
 def download_ai_image(prompt, out_filename):
-    # Pollinations AI से 100% फ्री और सटीक 9:16 HD इमेज जनरेशन
-    clean_p = requests.utils.quote(prompt + ", vertical 9:16 portrait orientation, photorealistic, ultra hd")
-    url = f"https://image.pollinations.ai/prompt/{clean_p}?width=720&height=1280&nologo=true&model=flux"
+    # सुपरफास्ट टर्बो मॉडल (बिना हैंग हुए 3-4 सेकंड में इमेज)
+    clean_p = requests.utils.quote(prompt + ", vertical 9:16 portrait orientation, cinematic, photorealistic")
+    url = f"https://image.pollinations.ai/prompt/{clean_p}?width=720&height=1280&nologo=true&model=turbo"
     try:
-        r = requests.get(url, timeout=30)
-        if r.status_code == 200 and len(r.content) > 15000:
+        r = requests.get(url, timeout=12)
+        if r.status_code == 200 and len(r.content) > 10000:
             with open(out_filename, "wb") as f:
                 f.write(r.content)
             return True
     except Exception as e:
-        print(f"Image generation error: {e}")
+        print(f"Image error: {e}")
     return False
 
 def make_subtitle_png(text, png_filename, width=720, height=1280):
@@ -207,23 +204,23 @@ async def build_viral_reel(topic):
         img_prompt = sc.get("image_prompt", f"cinematic scene of {topic}")
         ok = download_ai_image(img_prompt, scene_img)
         if not ok or not os.path.exists(scene_img):
-            download_ai_image(f"mysterious cinematic universe {topic}", scene_img)
+            # बैकअप डार्क सिनेमैटिक कैनवास
+            fallback_img = Image.new("RGB", (W, H), (15, 20, 28))
+            fallback_img.save(scene_img)
 
         # सबटाइटल
         make_subtitle_png(sub_text, sub_png, width=W, height=H)
 
-        # FFmpeg: इमेज पर स्मूथ सिनेमैटिक 3D ज़ूम मोशन + सबटाइटल ओवरले
-        # fps=24, frames = dur * 24
-        total_frames = int(dur * 24)
-        zoom_filter = (
-            f"[0:v]scale=800:1422,zoompan=z='min(zoom+0.0015,1.25)':d={total_frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={W}x{H}:fps=24[v0];"
+        # लो-RAM फास्ट मोशन (बिना हैंग हुए रेंडरिंग)
+        filter_complex = (
+            f"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H}[v0];"
             f"[v0][1:v]overlay=0:0[vout]"
         )
 
         ff_cmd = (
             f"ffmpeg -y -loop 1 -t {dur} -i \"{scene_img}\" -i \"{sub_png}\" -i \"{scene_audio}\" "
-            f"-filter_complex \"{zoom_filter}\" -map \"[vout]\" -map 2:a -r 24 -c:v libx264 "
-            f"-preset ultrafast -bufsize 1024k -threads 1 -c:a aac \"{seg_out}\""
+            f"-filter_complex \"{filter_complex}\" -map \"[vout]\" -map 2:a -r 24 -c:v libx264 "
+            f"-preset ultrafast -bufsize 512k -threads 1 -c:a aac \"{seg_out}\""
         )
         subprocess.run(ff_cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if os.path.exists(seg_out):
@@ -265,15 +262,15 @@ async def generate_reel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("कृपया विषय लिखें। उदाहरण: `/reel शेर जंगल का राजा क्यों है`")
         return
 
-    wait_msg = await update.message.reply_text(f"⚡ AI से '{topic}' पर अल्ट्रा HD रील और सिनेमैटिक विजुअल्स तैयार किए जा रहे हैं...")
+    wait_msg = await update.message.reply_text(f"⚡ '{topic}' पर HD रील तैयार की जा रही है...")
     temp_files = []
     try:
         script, video, temp_files = await build_viral_reel(topic)
         await update.message.reply_text(f"📝 *स्क्रिप्ट:*\n\n{script}", parse_mode="Markdown")
 
-        if os.path.exists(video) and os.path.getsize(video) > 50000:
+        if os.path.exists(video) and os.path.getsize(video) > 40000:
             with open(video, "rb") as vf:
-                await update.message.reply_video(video=vf, caption=f"🔥 AI HD रील: {topic}")
+                await update.message.reply_video(video=vf, caption=f"🔥 HD रील: {topic}")
         else:
             await update.message.reply_text("⚠️ वीडियो तैयार नहीं हो सका, पुनः प्रयास करें।")
 
@@ -295,10 +292,14 @@ async def generate_reel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👑 Hermes Pro AI Studio सक्रिय है!\n\nकमांड भेजें:\n`/reel <विषय>`")
 
+async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("✅ Hermes Studio बिल्कुल ठीक चल रहा है और रील बनाने के लिए तैयार है!")
+
 if __name__ == "__main__":
     ensure_assets()
     threading.Thread(target=run_http_server, daemon=True).start()
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler("reel", generate_reel))
     app.run_polling()
