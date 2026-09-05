@@ -25,17 +25,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 genai.configure(api_key=GEMINI_API_KEY)
 
-# ऑटो-डिटेक्ट मॉडल ताकि 404 एरर कभी न आए
-def get_working_model():
-    try:
-        for m in genai.list_models():
-            if "generateContent" in m.supported_generation_methods:
-                return genai.GenerativeModel(m.name)
-    except Exception:
-        pass
-    return genai.GenerativeModel("models/gemini-1.5-flash")
-
-model = get_working_model()
+model = genai.GenerativeModel("models/gemini-3.6-flash")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
