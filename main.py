@@ -179,8 +179,12 @@ async def build_viral_reel(topic):
         seg_out = f"seg_{idx}.mp4"
         temp_files.extend([scene_audio, raw_clip, sub_png, seg_out])
 
-        comm = edge_tts.Communicate(speech_text, voice="hi-IN-MadhurNeural")
-        await comm.save(scene_audio)
+        try:
+            comm = edge_tts.Communicate(speech_text, voice="hi-IN-SwaraNeural")
+            await comm.save(scene_audio)
+        except Exception:
+            comm = edge_tts.Communicate(speech_text, voice="hi-IN-MadhurNeural")
+            await comm.save(scene_audio)
         dur = get_file_duration(scene_audio)
 
         ok = download_pexels_clip(sc.get("search", topic), raw_clip, scene_index=idx)
