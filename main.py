@@ -15,7 +15,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Hermes Video Engine Active")
+        self.wfile.write(b"Hermes Video Engine Running")
 
 def run_http_server():
     port = int(os.environ.get("PORT", 10000))
@@ -62,22 +62,23 @@ def generate_script_dynamic(raw_topic):
     topic = clean_user_prompt(raw_topic)
     
     if GEMINI_API_KEY:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+        # gemini-2.5-flash सीधा और स्टेबल एंडपॉइंट
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
         headers = {"Content-Type": "application/json"}
         prompt = f"""
-Write an extremely engaging 3-scene Hindi Reel script about: '{topic}'.
-RULES:
-- DO NOT use repetitive generic lines like 'क्या आप जानते हैं' or 'इसके पीछे का सच'.
-- Scene 1: An intense curiosity hook sentence directly about {topic}.
-- Scene 2: The most shocking fact or mechanism about {topic}.
-- Scene 3: The powerful outcome or call to follow.
+Write an engaging 3-scene YouTube Shorts Hindi script about: '{topic}'.
+MANDATORY RULES:
+- NO generic template lines. Provide REAL, SPECIFIC, and SHOCKING FACTS about {topic}.
+- Scene 1: Direct powerful fact/hook in Hindi + English image prompt describing {topic} directly.
+- Scene 2: Deep surprising mechanism/fact in Hindi + English image prompt describing the inner detail of {topic}.
+- Scene 3: Conclusion in Hindi + English image prompt.
 
-Return ONLY a JSON object:
+Return valid JSON:
 {{
   "scenes": [
-    {{"speech": "पहला सीन हिंदी में", "sub": "हुक सबटाइटल", "visual_prompt": "cinematic photorealistic 8k visual of {topic}"}},
-    {{"speech": "दूसरा सीन हिंदी में", "sub": "मुख्य तथ्य", "visual_prompt": "detailed cinematic shot of {topic}"}},
-    {{"speech": "तीसरा सीन हिंदी में", "sub": "फॉलो करें", "visual_prompt": "epic atmospheric view of {topic}"}}
+    {{"speech": "पहला असली तथ्य हिंदी में", "visual_prompt": "cinematic 8k photorealistic scene of {topic}"}},
+    {{"speech": "दूसरा गहरा रहस्य हिंदी में", "visual_prompt": "ultra-detailed cinematic macro/close-up shot of {topic}"}},
+    {{"speech": "तीसरा निष्कर्ष हिंदी में", "visual_prompt": "epic cinematic wide shot of {topic}"}}
   ]
 }}
 """
@@ -92,17 +93,18 @@ Return ONLY a JSON object:
             res = requests.post(url, headers=headers, json=payload, timeout=12)
             if res.status_code == 200:
                 data = res.json()
-                out = data['candidates'][0]['content']['parts'][0]['text']
-                parsed = json.loads(re.search(r'\{.*\}', out, re.DOTALL).group(0))
+                out_text = data['candidates'][0]['content']['parts'][0]['text']
+                parsed = json.loads(re.search(r'\{.*\}', out_text, re.DOTALL).group(0))
                 if "scenes" in parsed and len(parsed["scenes"]) >= 3:
                     return parsed["scenes"]
         except Exception as e:
-            print(f"Gemini API error: {e}")
+            print(f"Gemini error: {e}")
 
+    # अगर जेमिनी किसी कारण से रुका, तो टॉपिक-स्पेसिफिक बैकअप
     return [
-        {"speech": f"{topic} से जुड़ी यह सच्चाई ज्यादातर लोगों को बिल्कुल नहीं पता।", "sub": "अनकही सच्चाई", "visual_prompt": f"cinematic mysterious view of {topic}"},
-        {"speech": f"यह चीज़ जितनी साधारण दिखती है, इसका प्रभाव उससे कहीं ज्यादा शक्तिशाली है।", "sub": "असरदार प्रभाव", "visual_prompt": f"detailed close-up dynamic shot of {topic}"},
-        {"speech": f"ऐसी ही अनोखी जानकारियों के लिए हमसे अभी जुड़ें।", "sub": "अभी फॉलो करें", "visual_prompt": f"epic cinematic shot of {topic}"}
+        {"speech": f"{topic} को लेकर वैज्ञानिकों ने हाल ही में एक बेहद हैरान करने वाला खुलासा किया है।", "visual_prompt": f"hyperrealistic cinematic space view of {topic}, 8k, photorealistic"},
+        {"speech": f"इसकी गहराई में जाने पर पता चलता है कि यह हमारी भौतिक दुनिया के नियमों को भी चुनौती देता है।", "visual_prompt": f"detailed glowing cinematic shot of {topic}, cosmic energy, 8k"},
+        {"speech": f"यही कारण है कि आज {topic} वैज्ञानिकों के लिए सबसे बड़ी पहेली बना हुआ है।", "visual_prompt": f"epic majestic deep space wide view of {topic}, volumetric light"}
     ]
 
 def get_file_duration(file_path):
@@ -113,49 +115,65 @@ def get_file_duration(file_path):
     except Exception:
         return 4.0
 
-def download_visual(prompt, out_filename):
-    clean_p = requests.utils.quote(prompt + ", vertical 9:16, cinematic lighting, 8k resolution, photorealistic")
+def download_visual(prompt, out_filename, topic, index):
+    # अंग्रेजी कीवर्ड्स के साथ सटीक प्रॉम्प्ट
+    clean_p = requests.utils.quote(f"{prompt}, vertical 9:16 portrait, cinematic lighting, 8k photorealistic")
     url = f"https://image.pollinations.ai/prompt/{clean_p}?width=576&height=1024&nologo=true&model=turbo"
     try:
-        r = requests.get(url, timeout=12)
-        if r.status_code == 200 and len(r.content) > 10000:
+        r = requests.get(url, timeout=20)
+        if r.status_code == 200 and len(r.content) > 15000:
             with open(out_filename, "wb") as f:
                 f.write(r.content)
             return True
     except Exception:
         pass
+
+    # अगर AI टाइमआउट हुआ, तो टॉपिक के अनुसार सीधे Unsplash HD से इमेज (कभी काला बैकग्राउंड नहीं आएगा)
+    try:
+        topic_clean = re.sub(r'[^a-zA-Z]', '', topic) or "galaxy"
+        backup_url = f"https://source.unsplash.com/featured/576x1024/?{topic_clean},space,stars&sig={index}"
+        r2 = requests.get(backup_url, timeout=10)
+        if r2.status_code == 200 and len(r2.content) > 10000:
+            with open(out_filename, "wb") as f:
+                f.write(r2.content)
+            return True
+    except Exception:
+        pass
+
     return False
 
-def make_subtitle_overlay(text, png_path, width=576, height=1024):
+def make_full_subtitle(text, png_path, width=576, height=1024):
     ensure_assets()
     img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     try:
-        font = ImageFont.truetype(FONT_PATH, 44)
+        font = ImageFont.truetype(FONT_PATH, 38)
     except Exception:
         font = ImageFont.load_default()
 
-    clean_sub = clean_text(text)
-    words = clean_sub.split()
+    clean_s = clean_text(text)
+    words = clean_s.split()
     lines, cur = [], []
     for w in words:
         cur.append(w)
-        if len(" ".join(cur)) > 11:
+        if len(" ".join(cur)) > 14:
             lines.append(" ".join(cur[:-1]))
             cur = [w]
     if cur:
         lines.append(" ".join(cur))
 
+    # स्क्रीन के 70% नीचे मॉडर्न सबटाइटल
     y = int(height * 0.70)
     for line in lines:
         bbox = draw.textbbox((0, 0), line, font=font)
         tw = bbox[2] - bbox[0]
         th = bbox[3] - bbox[1]
         x = (width - tw) // 2
-        
-        # मॉडर्न बोल्ड सबटाइटल: ब्राइट येलो + सॉलिड ब्लैक आउटलाइन
-        draw.text((x, y), line, font=font, fill=(255, 230, 0, 255),
-                  stroke_width=4, stroke_fill=(0, 0, 0, 255))
+
+        # डार्क बैकड्रॉप + ब्राइट येलो टेक्स्ट
+        pad_x, pad_y = 12, 6
+        draw.rounded_rectangle([x - pad_x, y - pad_y, x + tw + pad_x, y + th + pad_y], radius=8, fill=(0, 0, 0, 210))
+        draw.text((x, y), line, font=font, fill=(255, 235, 20, 255))
         y += th + 14
 
     img.save(png_path)
@@ -172,7 +190,6 @@ async def build_viral_reel(topic):
 
     for idx, sc in enumerate(scenes):
         speech_text = clean_text(sc.get("speech", ""))
-        sub_text = clean_text(sc.get("sub", speech_text[:14]))
         full_script_lines.append(speech_text)
 
         scene_audio = f"aud_{idx}.mp3"
@@ -181,7 +198,7 @@ async def build_viral_reel(topic):
         seg_out = f"seg_{idx}.mp4"
         temp_files.extend([scene_audio, scene_img, sub_png, seg_out])
 
-        # वॉइस को +15% तेज़ किया ताकि रील एंगेजिंग लगे
+        # वॉइस जनरेशन (+15% क्रिस्प पेसिंग)
         try:
             comm = edge_tts.Communicate(speech_text, voice="hi-IN-MadhurNeural", rate="+15%")
             await comm.save(scene_audio)
@@ -191,16 +208,18 @@ async def build_viral_reel(topic):
 
         dur = get_file_duration(scene_audio)
 
-        # AI विजुअल डाउनलोड
-        vis_prompt = sc.get("visual_prompt", f"cinematic scene of {topic}")
-        ok = download_visual(vis_prompt, scene_img)
+        # विजुअल डाउनलोड (समय 20 सेकंड तक दिया ताकि 2nd और 3rd सीन ब्लैंक न हों)
+        vis_prompt = sc.get("visual_prompt", f"{topic} deep space cosmic mystery")
+        ok = download_visual(vis_prompt, scene_img, topic, idx)
         if not ok or not os.path.exists(scene_img):
-            fallback_img = Image.new("RGB", (W, H), (15, 20, 28))
+            # अगर दोनों फ़ेल हों तो डार्क ब्लू स्पेस ग्रेडिएंट (पूरी तरह ब्लैक नहीं)
+            fallback_img = Image.new("RGB", (W, H), (10, 18, 32))
             fallback_img.save(scene_img)
 
-        make_subtitle_overlay(sub_text, sub_png, width=W, height=H)
+        # पूरे वाक्य का सबटाइटल
+        make_full_subtitle(speech_text, sub_png, width=W, height=H)
 
-        # लो-रैम मोशन: बिना 512MB RAM क्रैश किए स्मूथ रेंडर
+        # FFmpeg रेंडर
         filter_complex = (
             f"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H}[vbg];"
             f"[vbg][1:v]overlay=0:0[vout]"
@@ -234,7 +253,7 @@ async def build_viral_reel(topic):
         mix_cmd = (
             f"ffmpeg -y -i \"{raw_merged}\" -stream_loop -1 -i \"{BGM_PATH}\" "
             f"-filter_complex \"[1:a]volume=0.10[bgm];[0:a][bgm]amix=inputs=2:duration=first[aout]\" "
-            f"-map 0:v -map \"[aout]\" -c:v copy -c:a aac \"{final_video}\""
+            f"-map 0:v -map \"[aout]\" -r 30 -c:v copy -c:a aac \"{final_video}\""
         )
         subprocess.run(mix_cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     else:
@@ -251,17 +270,17 @@ async def generate_reel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("कृपया विषय लिखें। उदाहरण: `/reel ब्रह्मांड के अनसुलझे रहस्य`")
         return
 
-    wait_msg = await update.message.reply_text(f"⚡ '{topic}' पर ओरिजिनल HD रील तैयार हो रही है (15-20 सेकंड)...")
+    wait_msg = await update.message.reply_text(f"⚡ '{topic}' पर रील तैयार की जा रही है...")
     temp_files = []
     try:
         script, video, temp_files = await build_viral_reel(topic)
-        await update.message.reply_text(f"📝 *ओरिजिनल स्क्रिप्ट:*\n\n{script}", parse_mode="Markdown")
+        await update.message.reply_text(f"📝 *स्क्रिप्ट:*\n\n{script}", parse_mode="Markdown")
 
         if os.path.exists(video) and os.path.getsize(video) > 40000:
             with open(video, "rb") as vf:
-                await update.message.reply_video(video=vf, caption=f"🔥 HD रील: {topic}")
+                await update.message.reply_video(video=vf, caption=f"🔥 {topic}")
         else:
-            await update.message.reply_text("⚠️ वीडियो रेंडर नहीं हो सका, पुनः प्रयास करें।")
+            await update.message.reply_text("⚠️ वीडियो तैयार नहीं हो सका, पुनः प्रयास करें।")
 
     except Exception as e:
         await update.message.reply_text(f"⚠️ एरर: {str(e)}")
@@ -279,7 +298,7 @@ async def generate_reel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👑 Hermes AI Reel Studio सक्रिय है!\n\nरील बनाने के लिए भेजें:\n`/reel <विषय>`")
+    await update.message.reply_text("👑 Hermes Pro AI Studio लाइव है!\n\nकमांड भेजें:\n`/reel <विषय>`")
 
 if __name__ == "__main__":
     ensure_assets()
