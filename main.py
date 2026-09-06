@@ -2,6 +2,7 @@ import os
 import gc
 import re
 import json
+import time
 import threading
 import subprocess
 import requests
@@ -91,15 +92,32 @@ Return ONLY valid JSON matching this schema:
         }
     }
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={GEMINI_API_KEY}"
-    res = requests.post(url, headers=headers, json=payload, timeout=45)
-    if res.status_code != 200:
-        raise Exception(f"Gemini API Error ({res.status_code}): {res.text[:150]}")
+    # 503 और 404 से सुरक्षा के लिए मॉडल्स की सूची
+    models_to_try = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-1.5-flash"]
+    last_error = ""
 
-    data = res.json()
-    out_text = data['candidates'][0]['content']['parts'][0]['text']
-    parsed = json.loads(re.search(r'\{.*\}', out_text, re.DOTALL).group(0))
-    return parsed["scenes"]
+    for model_name in models_to_try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+        for attempt in range(2):
+            try:
+                res = requests.post(url, headers=headers, json=payload, timeout=35)
+                if res.status_code == 200:
+                    data = res.json()
+                    out_text = data['candidates'][0]['content']['parts'][0]['text']
+                    parsed = json.loads(re.search(r'\{.*\}', out_text, re.DOTALL).group(0))
+                    if "scenes" in parsed and len(parsed["scenes"]) >= 3:
+                        return parsed["scenes"]
+                elif res.status_code in (503, 429):
+                    time.sleep(2)
+                    continue
+                else:
+                    last_error = f"{model_name} ({res.status_code}): {res.text[:120]}"
+                    break
+            except Exception as e:
+                last_error = str(e)
+                time.sleep(1)
+
+    raise Exception(f"Gemini Server Busy: {last_error}")
 
 def get_file_duration(file_path):
     cmd = f"ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 \"{file_path}\""
@@ -159,7 +177,7 @@ def make_full_subtitle(text, png_path, width=576, height=1024):
     if cur:
         lines.append(" ".join(cur))
 
-    # सबटाइटल स्क्रीन के 60% हिस्से पर (नीचे से कटने का कोई खतरा नहीं)
+    # सबटाइटल स्क्रीन के 60% हिस्से पर
     y = int(height * 0.60)
     for line in lines:
         bbox = draw.textbbox((0, 0), line, font=font)
@@ -212,7 +230,7 @@ async def build_viral_reel(topic, update: Update):
 
         make_full_subtitle(speech_text, sub_png, width=W, height=H)
 
-        # मेमोरी-सेफ़ ज़ूम: 512MB RAM पर बिना क्रैश के स्मूथ मोशन
+        # 512MB RAM सुरक्षित ज़ूम फ़िल्टर
         filter_complex = (
             f"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},"
             f"zoompan=z='min(zoom+0.0008,1.10)':d={total_frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={W}x{H}:fps=30[vbg];"
