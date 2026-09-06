@@ -92,7 +92,6 @@ Return ONLY valid JSON matching this schema:
         }
     }
 
-    # सक्रिय मॉडल: gemini-3.6-flash
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={GEMINI_API_KEY}"
 
     try:
@@ -152,7 +151,8 @@ def make_full_subtitle(text, png_path, width=576, height=1024):
     font = None
     if os.path.exists(FONT_PATH):
         try:
-            font = ImageFont.truetype(FONT_PATH, 36)
+            # फ़ॉन्ट साइज़ 30px किया ताकि टेक्स्ट बिल्कुल सुरक्षित रहे
+            font = ImageFont.truetype(FONT_PATH, 30)
         except Exception:
             pass
     if font is None:
@@ -163,23 +163,24 @@ def make_full_subtitle(text, png_path, width=576, height=1024):
     lines, cur = [], []
     for w in words:
         cur.append(w)
-        if len(" ".join(cur)) > 14:
+        if len(" ".join(cur)) > 11:
             lines.append(" ".join(cur[:-1]))
             cur = [w]
     if cur:
         lines.append(" ".join(cur))
 
-    y = int(height * 0.72)
+    # सबटाइटल की पोज़ीशन 58% ऊँचाई पर सेट की ताकि नीचे से कभी न कटे
+    y = int(height * 0.58)
     for line in lines:
         bbox = draw.textbbox((0, 0), line, font=font)
         tw = bbox[2] - bbox[0]
         th = bbox[3] - bbox[1]
         x = (width - tw) // 2
 
-        pad_x, pad_y = 12, 6
+        pad_x, pad_y = 10, 5
         draw.rounded_rectangle([x - pad_x, y - pad_y, x + tw + pad_x, y + th + pad_y], radius=8, fill=(0, 0, 0, 210))
         draw.text((x, y), line, font=font, fill=(255, 235, 20, 255))
-        y += th + 14
+        y += th + 10
 
     img.save(png_path)
     img.close()
@@ -212,6 +213,7 @@ async def build_viral_reel(topic, update: Update):
             await comm.save(scene_audio)
 
         dur = get_file_duration(scene_audio)
+        total_frames = int(dur * 30)
 
         vis_prompt = sc.get("visual_prompt", f"{topic} dynamic cinematic view")
         ok = download_visual(vis_prompt, scene_img, topic, idx)
@@ -221,8 +223,9 @@ async def build_viral_reel(topic, update: Update):
 
         make_full_subtitle(speech_text, sub_png, width=W, height=H)
 
+        # 512MB RAM सेफ़ पैन और ज़ूम मोशन फ़िल्टर
         filter_complex = (
-            f"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H}[vbg];"
+            f"[0:v]scale={W}*2:{H}*2,zoompan=z='min(zoom+0.0015,1.18)':d={total_frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={W}x{H}:fps=30[vbg];"
             f"[vbg][1:v]overlay=0:0[vout]"
         )
 
@@ -267,10 +270,10 @@ async def build_viral_reel(topic, update: Update):
 async def generate_reel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     topic = clean_text(" ".join(context.args))
     if not topic:
-        await update.message.reply_text("कृपया विषय लिखें। उदाहरण: `/reel पानी पीने के फायदे`")
+        await update.message.reply_text("कृपया विषय लिखें। उदाहरण: `/reel ब्लैक होल का रहस्य`")
         return
 
-    wait_msg = await update.message.reply_text(f"⚡ '{topic}' पर रील प्रोसेस हो रही है... पूरा बनते ही वीडियो आ जाएगी!")
+    wait_msg = await update.message.reply_text(f"⚡ '{topic}' पर गतिशील रील तैयार हो रही है... पूरा बनते ही वीडियो आ जाएगी!")
     temp_files = []
     try:
         video, temp_files = await build_viral_reel(topic, update)
