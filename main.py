@@ -66,21 +66,21 @@ def generate_script_dynamic(raw_topic):
 
     headers = {"Content-Type": "application/json"}
     prompt = f"""
-Write an extremely engaging 3-scene Hindi Reel script about: '{topic}'.
+Write an extremely engaging 3-scene Hindi YouTube Shorts / Reel script about the topic: '{topic}'.
 MANDATORY RULES:
 - Provide REAL, SPECIFIC, UNIQUE facts about '{topic}'.
-- DO NOT use generic lines like 'क्या आप जानते हैं' or 'इसके पीछे का सच'.
-- Scene 1: Direct curiosity hook about '{topic}'.
-- Scene 2: The most shocking fact or mechanism about '{topic}'.
-- Scene 3: Practical impact or conclusion.
-- Visual prompts MUST directly describe '{topic}' visually in detailed cinematic English.
+- Strictly DO NOT use generic filler sentences like 'क्या आप जानते हैं', 'इसके पीछे का सच', or 'वैज्ञानिकों ने हाल ही में खुलासा किया'.
+- Scene 1: An intense hook about '{topic}' that surprises the viewer immediately.
+- Scene 2: The most shocking fact, benefit, or scientific mystery about '{topic}'.
+- Scene 3: The practical impact or conclusion.
+- Visual prompts MUST directly describe '{topic}' visually in detailed cinematic English (NO random human faces unless relevant).
 
-Return ONLY valid JSON:
+Return ONLY valid JSON matching this schema:
 {{
   "scenes": [
     {{"speech": "पहला सीन वाक्य हिंदी में", "visual_prompt": "cinematic hyperrealistic 8k shot of {topic}, dramatic lighting"}},
-    {{"speech": "दूसरा सीन वाक्य हिंदी में", "visual_prompt": "cinematic close-up detailed shot of {topic}, 8k"}},
-    {{"speech": "तीसरा सीन वाक्य हिंदी में", "visual_prompt": "epic cinematic wide view of {topic}, masterpiece"}}
+    {{"speech": "दूसरा सीन वाक्य हिंदी में", "visual_prompt": "cinematic macro close-up shot showing detail of {topic}, 8k"}},
+    {{"speech": "तीसरा सीन वाक्य हिंदी में", "visual_prompt": "epic cinematic wide angle view of {topic}, masterpiece"}}
   ]
 }}
 """
@@ -92,30 +92,24 @@ Return ONLY valid JSON:
         }
     }
 
-    # उपलब्ध मॉडल्स की लिस्ट
-    models_to_try = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
-    last_err = ""
+    # सक्रिय मॉडल: gemini-3.6-flash
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={GEMINI_API_KEY}"
 
-    for m in models_to_try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={GEMINI_API_KEY}"
-        try:
-            # 45 सेकंड का पर्याप्त टाइमआउट ताकि कभी Read Timeout न हो
-            res = requests.post(url, headers=headers, json=payload, timeout=45)
-            if res.status_code == 200:
-                data = res.json()
-                out_text = data['candidates'][0]['content']['parts'][0]['text']
-                match = re.search(r'\{.*\}', out_text, re.DOTALL)
-                if match:
-                    parsed = json.loads(match.group(0))
-                    if "scenes" in parsed and len(parsed["scenes"]) >= 3:
-                        return parsed["scenes"]
-            else:
-                last_err = f"{m} ({res.status_code}): {res.text[:150]}"
-        except Exception as e:
-            last_err = f"{m} Error: {str(e)}"
-            continue
-
-    raise Exception(f"Gemini Response Failed: {last_err}")
+    try:
+        res = requests.post(url, headers=headers, json=payload, timeout=45)
+        if res.status_code == 200:
+            data = res.json()
+            out_text = data['candidates'][0]['content']['parts'][0]['text']
+            match = re.search(r'\{.*\}', out_text, re.DOTALL)
+            if match:
+                parsed = json.loads(match.group(0))
+                if "scenes" in parsed and len(parsed["scenes"]) >= 3:
+                    return parsed["scenes"]
+            raise Exception(f"Invalid JSON: {out_text[:100]}")
+        else:
+            raise Exception(f"Gemini API Error ({res.status_code}): {res.text[:200]}")
+    except Exception as e:
+        raise Exception(f"Gemini 3.6 Error: {str(e)}")
 
 def get_file_duration(file_path):
     cmd = f"ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 \"{file_path}\""
@@ -196,7 +190,7 @@ async def build_viral_reel(topic, update: Update):
     scenes = generate_script_dynamic(topic)
     
     script_text = "\n\n".join([f"🎬 *सीन {i+1}:* {s['speech']}" for i, s in enumerate(scenes)])
-    await update.message.reply_text(f"📝 *ओरिजिनल स्क्रिप्ट:*\n\n{script_text}", parse_mode="Markdown")
+    await update.message.reply_text(f"📝 *जेमिनी द्वारा तैयार ओरिजिनल स्क्रिप्ट:*\n\n{script_text}", parse_mode="Markdown")
 
     rendered_segments = []
     temp_files = []
@@ -273,7 +267,7 @@ async def build_viral_reel(topic, update: Update):
 async def generate_reel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     topic = clean_text(" ".join(context.args))
     if not topic:
-        await update.message.reply_text("कृपया विषय लिखें। उदाहरण: `/reel नीली आँखों का अनोखा रहस्य`")
+        await update.message.reply_text("कृपया विषय लिखें। उदाहरण: `/reel पानी पीने के फायदे`")
         return
 
     wait_msg = await update.message.reply_text(f"⚡ '{topic}' पर रील प्रोसेस हो रही है... पूरा बनते ही वीडियो आ जाएगी!")
