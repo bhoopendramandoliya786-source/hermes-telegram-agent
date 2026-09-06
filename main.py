@@ -70,11 +70,11 @@ def generate_script_safe(raw_topic):
         prompt = f"""
 Create an extremely engaging and viral 3-scene YouTube Shorts/Reels script in Hindi about: '{topic}'.
 Requirements:
-- scene 1: Powerful Hook line in Hindi + 2-3 words punchy subtitle + photorealistic English prompt for image.
-- scene 2: Mindblowing fact in Hindi + 2-3 words punchy subtitle + detailed photorealistic English prompt.
-- scene 3: Call to action in Hindi + 2-3 words punchy subtitle + cinematic English prompt.
+- scene 1: Hook sentence in Hindi + short punchy subtitle (2-3 words) + detailed English visual prompt for AI image generator matching '{topic}'.
+- scene 2: Main shocking fact in Hindi + short punchy subtitle + detailed English visual prompt.
+- scene 3: Closing sentence in Hindi + short subtitle + cinematic English visual prompt.
 
-Return valid JSON:
+Return ONLY valid JSON:
 {{
   "scenes": [
     {{"speech": "पहला वाक्य हिंदी में", "sub": "संक्षिप्त सबटाइटल", "image_prompt": "cinematic photorealistic english description"}},
@@ -109,9 +109,9 @@ Return valid JSON:
 
     en = re.sub(r'[^a-zA-Z0-9\s]', '', topic).strip() or "epic discovery"
     return [
-        {"speech": f"क्या आप जानते हैं {topic} के बारे में यह चौंकाने वाला सच?", "sub": "अनोखा सच", "image_prompt": f"hyperrealistic cinematic scene of {en}, dramatic atmospheric lighting, 8k resolution, photorealistic"},
-        {"speech": f"इसके पीछे की सच्चाई जानकर आपके होश उड़ जाएंगे।", "sub": "हैरान करने वाला तथ्य", "image_prompt": f"detailed close-up cinematic shot of {en}, unreal engine 5, masterpiece"},
-        {"speech": "ऐसी ही अद्भुत जानकारियों के लिए अभी फॉलो करें।", "sub": "अभी फॉलो करें", "image_prompt": f"epic majestic atmospheric shot of {en}, glorious cinematic lighting"}
+        {"speech": f"क्या आप जानते हैं {topic} के बारे में यह अनोखा सच?", "sub": "अनोखा सच", "image_prompt": f"hyperrealistic cinematic scene of {en}, dramatic cinematic lighting, 8k resolution, vertical 9:16"},
+        {"speech": f"इसके पीछे की कहानी और तथ्य वाकई चौंका देने वाले हैं।", "sub": "हैरान करने वाला तथ्य", "image_prompt": f"detailed close-up cinematic shot of {en}, masterpiece, vivid unreal engine 5"},
+        {"speech": "ऐसी ही ज्ञानवर्धक जानकारियों के लिए हमें अभी फॉलो करें।", "sub": "अभी फॉलो करें", "image_prompt": f"epic majestic atmospheric shot of {en}, beautiful lighting, cinematic"}
     ]
 
 def get_file_duration(file_path):
@@ -123,7 +123,7 @@ def get_file_duration(file_path):
         return 4.0
 
 def download_ai_image(prompt, out_filename):
-    clean_p = requests.utils.quote(prompt + ", 8k resolution, cinematic lighting, hyper-realistic, dramatic, vertical 9:16 portrait orientation")
+    clean_p = requests.utils.quote(prompt + ", vertical 9:16 portrait orientation, cinematic, photorealistic, 8k resolution, ultra-detailed")
     url = f"https://image.pollinations.ai/prompt/{clean_p}?width=720&height=1280&nologo=true&model=turbo"
     try:
         r = requests.get(url, timeout=14)
@@ -162,12 +162,12 @@ def make_subtitle_png(text, png_filename, width=720, height=1280):
         th = bbox[3] - bbox[1]
         x = (width - tw) // 2
         
-        # इंस्टाग्राम स्टाइल: ब्राइट येलो टेक्स्ट और थिक ब्लैक बॉर्डर
+        # इंस्टाग्राम रील्स स्टाइल: ब्राइट येलो टेक्स्ट और थिक ब्लैक बॉर्डर
         stroke_w = 4
         draw.text((x, y), line, font=font, fill=(255, 235, 20, 255),
                   stroke_width=stroke_w, stroke_fill=(0, 0, 0, 255))
         y += th + 18
-        
+
     img.save(png_filename)
     img.close()
 
@@ -191,7 +191,7 @@ async def build_viral_reel(topic):
         seg_out = f"seg_{idx}.mp4"
         temp_files.extend([scene_audio, scene_img, sub_png, seg_out])
 
-        # वॉइस को +15% तेज़ किया ताकि रील सुस्त न लगे
+        # वॉइस को +15% तेज़ किया ताकि रील फास्ट और कैची लगे
         try:
             comm = edge_tts.Communicate(speech_text, voice="hi-IN-MadhurNeural", rate="+15%")
             await comm.save(scene_audio)
@@ -201,16 +201,18 @@ async def build_viral_reel(topic):
 
         dur = get_file_duration(scene_audio)
 
+        # AI इमेज डाउनलोड
         img_prompt = sc.get("image_prompt", f"cinematic scene of {topic}")
         ok = download_ai_image(img_prompt, scene_img)
         if not ok or not os.path.exists(scene_img):
             fallback_img = Image.new("RGB", (W, H), (15, 20, 28))
             fallback_img.save(scene_img)
 
+        # सबटाइटल इमेज
         make_subtitle_png(sub_text, sub_png, width=W, height=H)
 
+        # स्मूथ ज़ूम-इन मोशन (Ken Burns Effect) - बिना हैंग हुए फास्ट रेंडर
         total_frames = int(dur * 24)
-        # स्मूथ ज़ूम-इन मोशन (Ken Burns Effect)
         filter_complex = (
             f"[0:v]scale=-2:{H}*2,zoompan=z='min(zoom+0.0015,1.25)':d={total_frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={W}x{H}:fps=24[bg];"
             f"[bg][1:v]overlay=0:0[vout]"
