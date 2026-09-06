@@ -29,7 +29,7 @@ FONT_PATH = "NotoSansDevanagari-Bold.ttf"
 BGM_PATH = "bgm.mp3"
 
 def ensure_assets():
-    # पक्का और डायरेक्ट गूगल फ़ॉन्ट डाउनलोड ताकि खाली डिब्बे कभी न आएँ
+    # देवनागरी फ़ॉन्ट डाउनलोड ताकि सबटाइटल में डिब्बे न बनें
     if not os.path.exists(FONT_PATH) or os.path.getsize(FONT_PATH) < 20000:
         font_url = "https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoSansDevanagari/NotoSansDevanagari-Bold.ttf"
         try:
@@ -65,8 +65,8 @@ def generate_script_dynamic(raw_topic):
     if not GEMINI_API_KEY:
         raise Exception("GEMINI_API_KEY Render के Environment Variables में मौजूद नहीं है!")
 
-    # आधिकारिक v1beta gemini-2.5-flash एंडपॉइंट
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+    # एक्टिव मॉडल gemini-3.6-flash
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={GEMINI_API_KEY}"
     headers = {"Content-Type": "application/json"}
     
     prompt = f"""
@@ -123,11 +123,10 @@ def get_file_duration(file_path):
         return 4.0
 
 def download_visual(prompt, out_filename, topic, idx):
-    # पोलिनेशंस से विजुअल डाउनलोड
     clean_p = requests.utils.quote(f"{prompt}, vertical 9:16 portrait orientation, cinematic, photorealistic, 8k")
     url = f"https://image.pollinations.ai/prompt/{clean_p}?width=576&height=1024&nologo=true&model=turbo"
     try:
-        r = requests.get(url, timeout=16)
+        r = requests.get(url, timeout=25)
         if r.status_code == 200 and len(r.content) > 10000:
             with open(out_filename, "wb") as f:
                 f.write(r.content)
@@ -135,7 +134,7 @@ def download_visual(prompt, out_filename, topic, idx):
     except Exception:
         pass
 
-    # अगर पोलिनेशंस स्लो हुआ तो बैकअप: अनस्प्लैश डायरेक्ट HD (कभी ब्लैक स्क्रीन नहीं आएगी)
+    # बैकअप अनस्प्लैश इमेज (ताकि स्क्रीन काली न रहे)
     try:
         clean_topic = re.sub(r'[^a-zA-Z]', '', topic) or "nature"
         backup_url = f"https://images.unsplash.com/photo-1518837695005-2083093ee35b?auto=format&fit=crop&w=576&h=1024&q=80"
@@ -192,7 +191,6 @@ def make_full_subtitle(text, png_path, width=576, height=1024):
 async def build_viral_reel(topic, update: Update):
     ensure_assets()
     
-    # 1. जेमिनी से डायनामिक स्क्रिप्ट लेना
     scenes = generate_script_dynamic(topic)
     
     script_text = "\n\n".join([f"🎬 *सीन {i+1}:* {s['speech']}" for i, s in enumerate(scenes)])
@@ -210,7 +208,6 @@ async def build_viral_reel(topic, update: Update):
         seg_out = f"seg_{idx}.mp4"
         temp_files.extend([scene_audio, scene_img, sub_png, seg_out])
 
-        # वॉइस (+15% पेसिंग)
         try:
             comm = edge_tts.Communicate(speech_text, voice="hi-IN-MadhurNeural", rate="+15%")
             await comm.save(scene_audio)
@@ -220,14 +217,12 @@ async def build_viral_reel(topic, update: Update):
 
         dur = get_file_duration(scene_audio)
 
-        # विजुअल डाउनलोड (विषय के अनुसार)
         vis_prompt = sc.get("visual_prompt", f"{topic} dynamic cinematic view")
         ok = download_visual(vis_prompt, scene_img, topic, idx)
         if not ok or not os.path.exists(scene_img):
             fallback_img = Image.new("RGB", (W, H), (15, 28, 45))
             fallback_img.save(scene_img)
 
-        # बिना डिब्बों वाला साफ़ सबटाइटल
         make_full_subtitle(speech_text, sub_png, width=W, height=H)
 
         filter_complex = (
@@ -279,7 +274,7 @@ async def generate_reel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("कृपया विषय लिखें। उदाहरण: `/reel सुबह पानी पीने के वैज्ञानिक फायदे`")
         return
 
-    wait_msg = await update.message.reply_text(f"⚡ '{topic}' पर रील तैयार हो रही है... कृपया इंतज़ार करें!")
+    wait_msg = await update.message.reply_text(f"⚡ '{topic}' पर रील तैयार हो रही है... पूरा बनते ही यहाँ आ जाएगी!")
     temp_files = []
     try:
         video, temp_files = await build_viral_reel(topic, update)
@@ -291,7 +286,6 @@ async def generate_reel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⚠️ वीडियो रेंडर अधूरा रह गया, कृपया दोबारा कमांड भेजें।")
 
     except Exception as e:
-        # अगर जेमिनी में कोई भी दिक्कत होगी तो टेलीग्राम पर साफ़ दिखेगी
         await update.message.reply_text(f"❌ *सिस्टम एरर:*\n`{str(e)}`", parse_mode="Markdown")
     finally:
         for f in temp_files:
