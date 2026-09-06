@@ -2,20 +2,20 @@ import os
 import gc
 import re
 import json
-import time
 import threading
+import subprocess
 import requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from PIL import Image, ImageDraw, ImageFont
+import edge_tts
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-from google import genai
-from google.genai import types
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Hermes Cloud Engine Running")
+        self.wfile.write(b"Hermes Video Engine Active")
 
 def run_http_server():
     port = int(os.environ.get("PORT", 10000))
@@ -24,7 +24,30 @@ def run_http_server():
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-CREATOMATE_API_KEY = os.getenv("CREATOMATE_API_KEY")
+
+FONT_PATH = "NotoSansDevanagari.ttf"
+BGM_PATH = "bgm.mp3"
+
+def ensure_assets():
+    if not os.path.exists(FONT_PATH) or os.path.getsize(FONT_PATH) < 10000:
+        font_url = "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSansDevanagari/NotoSansDevanagari-Bold.ttf"
+        try:
+            r = requests.get(font_url, timeout=15)
+            if r.status_code == 200:
+                with open(FONT_PATH, "wb") as f:
+                    f.write(r.content)
+        except Exception:
+            pass
+
+    if not os.path.exists(BGM_PATH) or os.path.getsize(BGM_PATH) < 5000:
+        bgm_url = "https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3?filename=ambient-cinematic-112282.mp3"
+        try:
+            r = requests.get(bgm_url, timeout=15)
+            if r.status_code == 200:
+                with open(BGM_PATH, "wb") as f:
+                    f.write(r.content)
+        except Exception:
+            pass
 
 def clean_text(text):
     text = re.sub(r'[*_~`#\[\]\(\)\<\>\"\'\\]', ' ', text)
@@ -39,157 +62,216 @@ def generate_script_dynamic(raw_topic):
     topic = clean_user_prompt(raw_topic)
     
     if GEMINI_API_KEY:
-        try:
-            client = genai.Client(api_key=GEMINI_API_KEY)
-            prompt = f"""
-You are an expert viral content creator. Write an ultra-engaging, 3-scene Hindi YouTube Shorts/Reels script about: '{topic}'.
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+        headers = {"Content-Type": "application/json"}
+        prompt = f"""
+Write an extremely engaging 3-scene Hindi Reel script about: '{topic}'.
+RULES:
+- DO NOT use repetitive generic lines like 'क्या आप जानते हैं' or 'इसके पीछे का सच'.
+- Scene 1: An intense curiosity hook sentence directly about {topic}.
+- Scene 2: The most shocking fact or mechanism about {topic}.
+- Scene 3: The powerful outcome or call to follow.
 
-CRITICAL INSTRUCTIONS:
-- DO NOT use generic template lines like 'क्या आप जानते हैं', 'इसके पीछे का रहस्य', or 'हैरान कर देने वाला सच'.
-- Provide SPECIFIC facts, real history, interesting statistics, or deep trivia related directly to '{topic}'.
-- Scene 1: An intense question or hook directly introducing '{topic}'.
-- Scene 2: The most shocking, lesser-known reality or mechanism about '{topic}'.
-- Scene 3: The surprising outcome, real-world impact, or mind-blowing conclusion about '{topic}'.
-
-Return ONLY JSON matching this structure:
+Return ONLY a JSON object:
 {{
   "scenes": [
-    {{"speech": "पहला स्पेसिफिक वाक्य हिंदी में", "visual_prompt": "highly detailed English cinematic 8k visual prompt of {topic}"}},
-    {{"speech": "दूसरा गहरा तथ्य हिंदी में", "visual_prompt": "highly detailed English cinematic visual showing the core mechanism"}},
-    {{"speech": "तीसरा निष्कर्ष वाक्य हिंदी में", "visual_prompt": "epic cinematic dramatic visual conclusion"}}
+    {{"speech": "पहला सीन हिंदी में", "sub": "हुक सबटाइटल", "visual_prompt": "cinematic photorealistic 8k visual of {topic}"}},
+    {{"speech": "दूसरा सीन हिंदी में", "sub": "मुख्य तथ्य", "visual_prompt": "detailed cinematic shot of {topic}"}},
+    {{"speech": "तीसरा सीन हिंदी में", "sub": "फॉलो करें", "visual_prompt": "epic atmospheric view of {topic}"}}
   ]
 }}
 """
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    temperature=0.7
-                )
-            )
-            parsed = json.loads(response.text)
-            if "scenes" in parsed and len(parsed["scenes"]) >= 3:
-                return parsed["scenes"]
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0.7,
+                "response_mime_type": "application/json"
+            }
+        }
+        try:
+            res = requests.post(url, headers=headers, json=payload, timeout=12)
+            if res.status_code == 200:
+                data = res.json()
+                out = data['candidates'][0]['content']['parts'][0]['text']
+                parsed = json.loads(re.search(r'\{.*\}', out, re.DOTALL).group(0))
+                if "scenes" in parsed and len(parsed["scenes"]) >= 3:
+                    return parsed["scenes"]
         except Exception as e:
-            print(f"Gemini error: {e}")
+            print(f"Gemini API error: {e}")
 
-    # केवल आपातकालीन बैकअप
     return [
-        {"speech": f"{topic} की दुनिया में ऐसे कई राज़ छिपे हैं जो बहुत कम लोग समझ पाते हैं।", "visual_prompt": f"cinematic mysterious 8k shot of {topic}"},
-        {"speech": f"इसकी सबसे अनोखी बात यह है कि इसका असर हमारी सोच से भी कहीं ज़्यादा गहरा होता है।", "visual_prompt": f"detailed close-up dynamic angle of {topic}, photorealistic"},
-        {"speech": f"यही वजह है कि आज {topic} पूरी दुनिया में सबसे अलग और चर्चा का विषय बना हुआ है।", "visual_prompt": f"epic cinematic wide view of {topic}, dramatic lighting"}
+        {"speech": f"{topic} से जुड़ी यह सच्चाई ज्यादातर लोगों को बिल्कुल नहीं पता।", "sub": "अनकही सच्चाई", "visual_prompt": f"cinematic mysterious view of {topic}"},
+        {"speech": f"यह चीज़ जितनी साधारण दिखती है, इसका प्रभाव उससे कहीं ज्यादा शक्तिशाली है।", "sub": "असरदार प्रभाव", "visual_prompt": f"detailed close-up dynamic shot of {topic}"},
+        {"speech": f"ऐसी ही अनोखी जानकारियों के लिए हमसे अभी जुड़ें।", "sub": "अभी फॉलो करें", "visual_prompt": f"epic cinematic shot of {topic}"}
     ]
 
-def render_with_creatomate(scenes):
-    elements = []
-    current_time = 0.0
-    scene_dur = 4.0
+def get_file_duration(file_path):
+    cmd = f"ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 \"{file_path}\""
+    try:
+        out = subprocess.check_output(cmd, shell=True).decode().strip()
+        return max(2.5, float(out))
+    except Exception:
+        return 4.0
 
-    for sc in scenes:
-        prompt_enc = requests.utils.quote(sc["visual_prompt"] + ", vertical 9:16 portrait orientation, cinematic, photorealistic, 8k resolution")
-        img_url = f"https://image.pollinations.ai/prompt/{prompt_enc}?width=1080&height=1920&nologo=true&model=turbo"
+def download_visual(prompt, out_filename):
+    clean_p = requests.utils.quote(prompt + ", vertical 9:16, cinematic lighting, 8k resolution, photorealistic")
+    url = f"https://image.pollinations.ai/prompt/{clean_p}?width=576&height=1024&nologo=true&model=turbo"
+    try:
+        r = requests.get(url, timeout=12)
+        if r.status_code == 200 and len(r.content) > 10000:
+            with open(out_filename, "wb") as f:
+                f.write(r.content)
+            return True
+    except Exception:
+        pass
+    return False
 
-        # बैकग्राउंड इमेज + ज़ूम इफ़ेक्ट
-        elements.append({
-            "type": "image",
-            "url": img_url,
-            "time": current_time,
-            "duration": scene_dur,
-            "fit": "cover",
-            "animations": [
-                {
-                    "time": "start",
-                    "duration": scene_dur,
-                    "easing": "linear",
-                    "type": "scale",
-                    "scale_start": "100%",
-                    "scale_end": "115%"
-                }
-            ]
-        })
+def make_subtitle_overlay(text, png_path, width=576, height=1024):
+    ensure_assets()
+    img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    try:
+        font = ImageFont.truetype(FONT_PATH, 44)
+    except Exception:
+        font = ImageFont.load_default()
 
-        # टेक्स्ट टू स्पीच
-        elements.append({
-            "type": "audio",
-            "source": "text-to-speech",
-            "voice": "hi-IN-MadhurNeural",
-            "text": sc["speech"],
-            "time": current_time
-        })
+    clean_sub = clean_text(text)
+    words = clean_sub.split()
+    lines, cur = [], []
+    for w in words:
+        cur.append(w)
+        if len(" ".join(cur)) > 11:
+            lines.append(" ".join(cur[:-1]))
+            cur = [w]
+    if cur:
+        lines.append(" ".join(cur))
 
-        # बोल्ड पीले सबटाइटल्स
-        elements.append({
-            "type": "text",
-            "text": sc["speech"],
-            "time": current_time,
-            "duration": scene_dur,
-            "y": "74%",
-            "width": "86%",
-            "font_family": "Noto Sans Devanagari",
-            "font_size": "54 px",
-            "font_weight": "bold",
-            "fill_color": "#FFE600",
-            "stroke_color": "#000000",
-            "stroke_width": "8 px",
-            "x_alignment": "50%",
-            "y_alignment": "50%"
-        })
+    y = int(height * 0.70)
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=font)
+        tw = bbox[2] - bbox[0]
+        th = bbox[3] - bbox[1]
+        x = (width - tw) // 2
+        
+        # मॉडर्न बोल्ड सबटाइटल: ब्राइट येलो + सॉलिड ब्लैक आउटलाइन
+        draw.text((x, y), line, font=font, fill=(255, 230, 0, 255),
+                  stroke_width=4, stroke_fill=(0, 0, 0, 255))
+        y += th + 14
 
-        current_time += scene_dur
+    img.save(png_path)
+    img.close()
 
-    headers = {
-        "Authorization": f"Bearer {CREATOMATE_API_KEY}",
-        "Content-Type": "application/json"
-    }
+async def build_viral_reel(topic):
+    ensure_assets()
+    scenes = generate_script_dynamic(topic)
+    rendered_segments = []
+    temp_files = []
+    full_script_lines = []
 
-    # मान्य Creatomate JSON स्कीमा
-    render_payload = {
-        "source": {
-            "output_format": "mp4",
-            "frame_rate": 60,
-            "width": 1080,
-            "height": 1920,
-            "elements": elements
-        }
-    }
+    W, H = 576, 1024
 
-    res = requests.post("https://api.creatomate.com/v1/renders", headers=headers, json=render_payload, timeout=20)
-    if res.status_code not in (200, 202):
-        raise Exception(f"Creatomate Error: {res.text}")
+    for idx, sc in enumerate(scenes):
+        speech_text = clean_text(sc.get("speech", ""))
+        sub_text = clean_text(sc.get("sub", speech_text[:14]))
+        full_script_lines.append(speech_text)
 
-    render_data = res.json()[0]
-    render_id = render_data["id"]
+        scene_audio = f"aud_{idx}.mp3"
+        scene_img = f"vis_{idx}.jpg"
+        sub_png = f"sub_{idx}.png"
+        seg_out = f"seg_{idx}.mp4"
+        temp_files.extend([scene_audio, scene_img, sub_png, seg_out])
 
-    for _ in range(35):
-        time.sleep(2)
-        check = requests.get(f"https://api.creatomate.com/v1/renders/{render_id}", headers=headers, timeout=10)
-        status_info = check.json()
-        if status_info.get("status") == "succeeded":
-            return status_info.get("url")
-        elif status_info.get("status") == "failed":
-            raise Exception("Cloud render failed.")
+        # वॉइस को +15% तेज़ किया ताकि रील एंगेजिंग लगे
+        try:
+            comm = edge_tts.Communicate(speech_text, voice="hi-IN-MadhurNeural", rate="+15%")
+            await comm.save(scene_audio)
+        except Exception:
+            comm = edge_tts.Communicate(speech_text, voice="hi-IN-SwaraNeural", rate="+15%")
+            await comm.save(scene_audio)
 
-    raise Exception("रेंडर में अधिक समय लग रहा है।")
+        dur = get_file_duration(scene_audio)
+
+        # AI विजुअल डाउनलोड
+        vis_prompt = sc.get("visual_prompt", f"cinematic scene of {topic}")
+        ok = download_visual(vis_prompt, scene_img)
+        if not ok or not os.path.exists(scene_img):
+            fallback_img = Image.new("RGB", (W, H), (15, 20, 28))
+            fallback_img.save(scene_img)
+
+        make_subtitle_overlay(sub_text, sub_png, width=W, height=H)
+
+        # लो-रैम मोशन: बिना 512MB RAM क्रैश किए स्मूथ रेंडर
+        filter_complex = (
+            f"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H}[vbg];"
+            f"[vbg][1:v]overlay=0:0[vout]"
+        )
+
+        ff_cmd = (
+            f"ffmpeg -y -loop 1 -t {dur} -i \"{scene_img}\" -i \"{sub_png}\" -i \"{scene_audio}\" "
+            f"-filter_complex \"{filter_complex}\" -map \"[vout]\" -map 2:a -r 30 -c:v libx264 "
+            f"-preset ultrafast -bufsize 256k -threads 1 -c:a aac \"{seg_out}\""
+        )
+        subprocess.run(ff_cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if os.path.exists(seg_out):
+            rendered_segments.append(seg_out)
+
+    concat_list = "concat_list.txt"
+    temp_files.append(concat_list)
+    with open(concat_list, "w") as f:
+        for seg in rendered_segments:
+            f.write(f"file '{os.path.abspath(seg)}'\n")
+
+    raw_merged = "raw_merged.mp4"
+    final_video = "viral_reel_hd.mp4"
+    temp_files.extend([raw_merged, final_video])
+
+    subprocess.run(
+        f"ffmpeg -y -f concat -safe 0 -i \"{concat_list}\" -c copy \"{raw_merged}\"",
+        shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+
+    if os.path.exists(BGM_PATH):
+        mix_cmd = (
+            f"ffmpeg -y -i \"{raw_merged}\" -stream_loop -1 -i \"{BGM_PATH}\" "
+            f"-filter_complex \"[1:a]volume=0.10[bgm];[0:a][bgm]amix=inputs=2:duration=first[aout]\" "
+            f"-map 0:v -map \"[aout]\" -c:v copy -c:a aac \"{final_video}\""
+        )
+        subprocess.run(mix_cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        if os.path.exists(raw_merged):
+            os.rename(raw_merged, final_video)
+
+    gc.collect()
+    full_script = "\n\n".join(full_script_lines)
+    return full_script, final_video, temp_files
 
 async def generate_reel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     topic = clean_text(" ".join(context.args))
     if not topic:
-        await update.message.reply_text("कृपया विषय लिखें। उदाहरण: `/reel ब्लैक होल का रहस्य`")
+        await update.message.reply_text("कृपया विषय लिखें। उदाहरण: `/reel ब्रह्मांड के अनसुलझे रहस्य`")
         return
 
-    wait_msg = await update.message.reply_text(f"🚀 '{topic}' पर 60 FPS ओरिजिनल रील तैयार हो रही है...")
+    wait_msg = await update.message.reply_text(f"⚡ '{topic}' पर ओरिजिनल HD रील तैयार हो रही है (15-20 सेकंड)...")
+    temp_files = []
     try:
-        scenes = generate_script_dynamic(topic)
-        script_text = "\n\n".join([s["speech"] for s in scenes])
-        await update.message.reply_text(f"📝 *ओरिजिनल स्क्रिप्ट:*\n\n{script_text}", parse_mode="Markdown")
+        script, video, temp_files = await build_viral_reel(topic)
+        await update.message.reply_text(f"📝 *ओरिजिनल स्क्रिप्ट:*\n\n{script}", parse_mode="Markdown")
 
-        video_url = render_with_creatomate(scenes)
-        await update.message.reply_video(video=video_url, caption=f"🔥 60 FPS HD: {topic}")
+        if os.path.exists(video) and os.path.getsize(video) > 40000:
+            with open(video, "rb") as vf:
+                await update.message.reply_video(video=vf, caption=f"🔥 HD रील: {topic}")
+        else:
+            await update.message.reply_text("⚠️ वीडियो रेंडर नहीं हो सका, पुनः प्रयास करें।")
 
     except Exception as e:
         await update.message.reply_text(f"⚠️ एरर: {str(e)}")
     finally:
+        for f in temp_files:
+            if os.path.exists(f):
+                try:
+                    os.remove(f)
+                except Exception:
+                    pass
         gc.collect()
         try:
             await wait_msg.delete()
@@ -197,9 +279,10 @@ async def generate_reel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👑 Hermes AI Studio लाइव है!\n\nनई रील बनाने के लिए भेजें:\n`/reel <विषय>`")
+    await update.message.reply_text("👑 Hermes AI Reel Studio सक्रिय है!\n\nरील बनाने के लिए भेजें:\n`/reel <विषय>`")
 
 if __name__ == "__main__":
+    ensure_assets()
     threading.Thread(target=run_http_server, daemon=True).start()
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
