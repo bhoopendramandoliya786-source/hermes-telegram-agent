@@ -6,7 +6,6 @@ import threading
 import subprocess
 import requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from PIL import Image, ImageDraw, ImageFont
 import edge_tts
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
@@ -15,7 +14,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Hermes Video Engine Running")
+        self.wfile.write(b"Hermes 60FPS Video Engine Active")
 
 def run_http_server():
     port = int(os.environ.get("PORT", 10000))
@@ -68,13 +67,18 @@ def generate_script_safe(raw_topic):
             "x-goog-api-key": GEMINI_API_KEY
         }
         prompt = f"""
-Create a 3-scene YouTube Shorts script in Hindi about: '{topic}'.
-JSON format:
+Create a high-retention 3-scene Hindi Reel script about: '{topic}'.
+Requirements:
+- scene 1: Hook speech in Hindi + vivid English visual prompt for cinematic video generation.
+- scene 2: Main core fact speech in Hindi + vivid English visual prompt.
+- scene 3: Call to action in Hindi + dramatic closing English visual prompt.
+
+Output ONLY valid JSON:
 {{
   "scenes": [
-    {{"speech": "पहला वाक्य हिंदी में", "sub": "संक्षिप्त सबटाइटल", "image_prompt": "cinematic english description"}},
-    {{"speech": "दूसरा वाक्य हिंदी में", "sub": "संक्षिप्त सबटाइटल", "image_prompt": "cinematic english description"}},
-    {{"speech": "तीसरा वाक्य हिंदी में", "sub": "फॉलो करें", "image_prompt": "cinematic english description"}}
+    {{"speech": "पहला वाक्य हिंदी में", "visual_prompt": "cinematic hyperrealistic 8k video prompt"}},
+    {{"speech": "दूसरा वाक्य हिंदी में", "visual_prompt": "cinematic hyperrealistic 8k video prompt"}},
+    {{"speech": "तीसरा वाक्य हिंदी में", "visual_prompt": "cinematic hyperrealistic 8k video prompt"}}
   ]
 }}
 """
@@ -98,11 +102,11 @@ JSON format:
             except Exception:
                 continue
 
-    en = re.sub(r'[^a-zA-Z0-9\s]', '', topic).strip() or "epic facts"
+    en = re.sub(r'[^a-zA-Z0-9\s]', '', topic).strip() or "epic discovery"
     return [
-        {"speech": f"क्या आप जानते हैं {topic} के बारे में यह सच?", "sub": "अनोखा सच", "image_prompt": f"cinematic portrait view of {en}, 8k"},
-        {"speech": f"इसके पीछे का रहस्य बहुत ही हैरान कर देने वाला है।", "sub": "हैरान करने वाला तथ्य", "image_prompt": f"detailed shot of {en}, dramatic"},
-        {"speech": "ऐसी ही जानकारियों के लिए हमें अभी फॉलो करें।", "sub": "अभी फॉलो करें", "image_prompt": f"epic cinematic view of {en}"}
+        {"speech": f"क्या आप जानते हैं {topic} के बारे में यह चौंकाने वाला सच?", "visual_prompt": f"cinematic drone shot of {en}, dramatic lighting, 8k"},
+        {"speech": f"इसके पीछे की सच्चाई जानकर आपके होश उड़ जाएंगे।", "visual_prompt": f"hyperrealistic close-up dynamic scene of {en}, masterpiece"},
+        {"speech": "ऐसी ही अद्भुत जानकारियों के लिए हमें अभी फॉलो करें।", "visual_prompt": f"majestic atmospheric shot of {en}, cinematic"}
     ]
 
 def get_file_duration(file_path):
@@ -113,12 +117,12 @@ def get_file_duration(file_path):
     except Exception:
         return 4.0
 
-def download_ai_image(prompt, out_filename):
-    clean_p = requests.utils.quote(prompt + ", vertical 9:16, photorealistic")
-    # टर्बो मॉडल 3 सेकंड में डाउनलोड होता है
+def download_visual_clip(prompt, out_filename):
+    clean_p = requests.utils.quote(prompt + ", vertical 9:16 portrait, smooth camera motion, cinematic, 8k")
+    # टर्बो AI इंजन से फास्ट विज़ुअल लोड
     url = f"https://image.pollinations.ai/prompt/{clean_p}?width=576&height=1024&nologo=true&model=turbo"
     try:
-        r = requests.get(url, timeout=12)
+        r = requests.get(url, timeout=14)
         if r.status_code == 200 and len(r.content) > 10000:
             with open(out_filename, "wb") as f:
                 f.write(r.content)
@@ -127,40 +131,28 @@ def download_ai_image(prompt, out_filename):
         pass
     return False
 
-def make_subtitle_png(text, png_filename, width=576, height=1024):
-    ensure_assets()
-    img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    try:
-        font = ImageFont.truetype(FONT_PATH, 42)
-    except Exception:
-        font = ImageFont.load_default()
+def make_srt_file(text, duration, srt_path):
+    clean_s = clean_text(text)
+    words = clean_s.split()
+    if not words:
+        words = [clean_s]
 
-    clean_sub = clean_text(text)
-    words = clean_sub.split()
-    lines, cur = [], []
-    for w in words:
-        cur.append(w)
-        if len(" ".join(cur)) > 10:
-            lines.append(" ".join(cur[:-1]))
-            cur = [w]
-    if cur:
-        lines.append(" ".join(cur))
+    chunk_size = 3
+    chunks = [" ".join(words[i:i + chunk_size]) for i in range(0, len(words), chunk_size)]
+    chunk_dur = duration / max(1, len(chunks))
 
-    y = int(height * 0.70)
-    for line in lines:
-        bbox = draw.textbbox((0, 0), line, font=font)
-        tw = bbox[2] - bbox[0]
-        th = bbox[3] - bbox[1]
-        x = (width - tw) // 2
-        
-        # आउटलाइन सबटाइटल
-        draw.text((x, y), line, font=font, fill=(255, 235, 20, 255),
-                  stroke_width=3, stroke_fill=(0, 0, 0, 255))
-        y += th + 14
+    with open(srt_path, "w", encoding="utf-8") as f:
+        for idx, chunk in enumerate(chunks):
+            start_sec = idx * chunk_dur
+            end_sec = min(duration, (idx + 1) * chunk_dur)
 
-    img.save(png_filename)
-    img.close()
+            sh, sm, ss = int(start_sec // 3600), int((start_sec % 3600) // 60), start_sec % 60
+            eh, em, es = int(end_sec // 3600), int((end_sec % 3600) // 60), end_sec % 60
+
+            start_str = f"{sh:02d}:{sm:02d}:{int(ss):02d},{int((ss % 1) * 1000):03d}"
+            end_str = f"{eh:02d}:{em:02d}:{int(es):02d},{int((es % 1) * 1000):03d}"
+
+            f.write(f"{idx + 1}\n{start_str} --> {end_str}\n{chunk}\n\n")
 
 async def build_viral_reel(topic):
     ensure_assets()
@@ -169,20 +161,19 @@ async def build_viral_reel(topic):
     temp_files = []
     full_script_lines = []
 
-    # 576x1024 (लो-रैम 512MB के लिए सुरक्षित और क्रिस्प रिज़ॉल्यूशन)
     W, H = 576, 1024
 
     for idx, sc in enumerate(scenes):
         speech_text = clean_text(sc.get("speech", ""))
-        sub_text = clean_text(sc.get("sub", speech_text[:12]))
         full_script_lines.append(speech_text)
 
         scene_audio = f"audio_{idx}.mp3"
-        scene_img = f"img_{idx}.jpg"
-        sub_png = f"sub_{idx}.png"
+        scene_img = f"visual_{idx}.jpg"
+        scene_srt = f"sub_{idx}.srt"
         seg_out = f"seg_{idx}.mp4"
-        temp_files.extend([scene_audio, scene_img, sub_png, seg_out])
+        temp_files.extend([scene_audio, scene_img, scene_srt, seg_out])
 
+        # वॉइस को +15% पेसिंग दी गई
         try:
             comm = edge_tts.Communicate(speech_text, voice="hi-IN-MadhurNeural", rate="+15%")
             await comm.save(scene_audio)
@@ -192,23 +183,30 @@ async def build_viral_reel(topic):
 
         dur = get_file_duration(scene_audio)
 
-        img_prompt = sc.get("image_prompt", f"cinematic scene of {topic}")
-        ok = download_ai_image(img_prompt, scene_img)
+        # विजुअल डाउनलोड
+        vis_prompt = sc.get("visual_prompt", f"cinematic dynamic scene of {topic}")
+        ok = download_visual_clip(vis_prompt, scene_img)
         if not ok or not os.path.exists(scene_img):
-            fallback_img = Image.new("RGB", (W, H), (15, 20, 28))
-            fallback_img.save(scene_img)
+            fallback_img = f"ffmpeg -y -f lavfi -i color=c=0x111622:s={W}x{H}:d=1 -vframes 1 {scene_img}"
+            subprocess.run(fallback_img, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-        make_subtitle_png(sub_text, sub_png, width=W, height=H)
+        make_srt_file(speech_text, dur, scene_srt)
 
-        # मेमोरी-फ्रेंडली फ़िल्टर: बिना RAM क्रैश किए स्मूथ डायनेमिक लुक
+        # 60 FPS + डायनामिक मोशन + वर्ड सबटाइटल बर्न
+        total_frames = int(dur * 60)
+        sub_style = (
+            "FontName=Noto Sans Devanagari,FontSize=18,PrimaryColour=&H0014EBFF,"
+            "OutlineColour=&H00000000,BorderStyle=1,Outline=2,Alignment=2,MarginV=120"
+        )
+
         filter_complex = (
-            f"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H}[v0];"
-            f"[v0][1:v]overlay=0:0[vout]"
+            f"[0:v]scale=-2:{H}*2,zoompan=z='min(zoom+0.0008,1.20)':d={total_frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={W}x{H}:fps=60,"
+            f"subtitles='{scene_srt}':force_style='{sub_style}'[vout]"
         )
 
         ff_cmd = (
-            f"ffmpeg -y -loop 1 -t {dur} -i \"{scene_img}\" -i \"{sub_png}\" -i \"{scene_audio}\" "
-            f"-filter_complex \"{filter_complex}\" -map \"[vout]\" -map 2:a -r 24 -c:v libx264 "
+            f"ffmpeg -y -loop 1 -t {dur} -i \"{scene_img}\" -i \"{scene_audio}\" "
+            f"-filter_complex \"{filter_complex}\" -map \"[vout]\" -map 1:a -r 60 -c:v libx264 "
             f"-preset ultrafast -threads 1 -c:a aac \"{seg_out}\""
         )
         subprocess.run(ff_cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -222,7 +220,7 @@ async def build_viral_reel(topic):
             f.write(f"file '{os.path.abspath(seg)}'\n")
 
     raw_merged = "raw_merged.mp4"
-    final_video = "viral_reel_hd.mp4"
+    final_video = "viral_reel_60fps.mp4"
     temp_files.extend([raw_merged, final_video])
 
     subprocess.run(
@@ -234,7 +232,7 @@ async def build_viral_reel(topic):
         mix_cmd = (
             f"ffmpeg -y -i \"{raw_merged}\" -stream_loop -1 -i \"{BGM_PATH}\" "
             f"-filter_complex \"[1:a]volume=0.10[bgm];[0:a][bgm]amix=inputs=2:duration=first[aout]\" "
-            f"-map 0:v -map \"[aout]\" -c:v copy -c:a aac \"{final_video}\""
+            f"-map 0:v -map \"[aout]\" -r 60 -c:v copy -c:a aac \"{final_video}\""
         )
         subprocess.run(mix_cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     else:
@@ -248,10 +246,10 @@ async def build_viral_reel(topic):
 async def generate_reel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     topic = clean_text(" ".join(context.args))
     if not topic:
-        await update.message.reply_text("कृपया विषय लिखें। उदाहरण: `/reel अंतरिक्ष के रहस्य`")
+        await update.message.reply_text("कृपया विषय लिखें। उदाहरण: `/reel ब्रह्मांड के अनसुलझे रहस्य`")
         return
 
-    wait_msg = await update.message.reply_text(f"⚡ '{topic}' पर रील तैयार हो रही है (लगभग 20-30 सेकंड)...")
+    wait_msg = await update.message.reply_text(f"⚡ '{topic}' पर 60 FPS रील तैयार की जा रही है...")
     temp_files = []
     try:
         script, video, temp_files = await build_viral_reel(topic)
@@ -259,14 +257,13 @@ async def generate_reel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if os.path.exists(video) and os.path.getsize(video) > 40000:
             with open(video, "rb") as vf:
-                await update.message.reply_video(video=vf, caption=f"🔥 {topic}")
+                await update.message.reply_video(video=vf, caption=f"🔥 60 FPS HD रील: {topic}")
         else:
-            await update.message.reply_text("⚠️ वीडियो रेंडर नहीं हो सका, कृपया दोबारा प्रयास करें।")
+            await update.message.reply_text("⚠️ वीडियो तैयार नहीं हो सका, पुनः प्रयास करें।")
 
     except Exception as e:
         await update.message.reply_text(f"⚠️ एरर: {str(e)}")
     finally:
-        # ऑटो-क्लीनअप: रील सेंड होते ही सारी फाइल्स डिस्क से हटेंगी और रैम खाली होगी
         for f in temp_files:
             if os.path.exists(f):
                 try:
@@ -280,10 +277,10 @@ async def generate_reel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👑 Hermes AI Studio तैयार है!\n\nरील बनाने के लिए भेजें:\n`/reel <टॉपिक>`")
+    await update.message.reply_text("👑 Hermes 60FPS AI Studio सक्रिय है!\n\nरील बनाने के लिए भेजें:\n`/reel <विषय>`")
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ सर्वर लाइव है और RAM बिल्कुल खाली है!")
+    await update.message.reply_text("✅ Hermes 60FPS Studio लाइव है और तैयार है!")
 
 if __name__ == "__main__":
     ensure_assets()
