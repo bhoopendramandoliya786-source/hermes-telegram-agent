@@ -29,16 +29,15 @@ FONT_PATH = "NotoSansDevanagari-Bold.ttf"
 BGM_PATH = "bgm.mp3"
 
 def ensure_assets():
-    # देवनागरी फ़ॉन्ट डाउनलोड ताकि सबटाइटल में डिब्बे न बनें
     if not os.path.exists(FONT_PATH) or os.path.getsize(FONT_PATH) < 20000:
         font_url = "https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoSansDevanagari/NotoSansDevanagari-Bold.ttf"
         try:
-            r = requests.get(font_url, timeout=20)
+            r = requests.get(font_url, timeout=25)
             if r.status_code == 200 and len(r.content) > 20000:
                 with open(FONT_PATH, "wb") as f:
                     f.write(r.content)
         except Exception as e:
-            print(f"Font download error: {e}")
+            print(f"Font error: {e}")
 
     if not os.path.exists(BGM_PATH) or os.path.getsize(BGM_PATH) < 5000:
         bgm_url = "https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3?filename=ambient-cinematic-112282.mp3"
@@ -63,28 +62,25 @@ def generate_script_dynamic(raw_topic):
     topic = clean_user_prompt(raw_topic)
     
     if not GEMINI_API_KEY:
-        raise Exception("GEMINI_API_KEY Render के Environment Variables में मौजूद नहीं है!")
+        raise Exception("GEMINI_API_KEY Render Environment में सेट नहीं है!")
 
-    # एक्टिव मॉडल gemini-3.6-flash
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={GEMINI_API_KEY}"
     headers = {"Content-Type": "application/json"}
-    
     prompt = f"""
-Write an extremely engaging 3-scene Hindi YouTube Shorts / Reel script about the topic: '{topic}'.
+Write an extremely engaging 3-scene Hindi Reel script about: '{topic}'.
 MANDATORY RULES:
-- Provide REAL, SPECIFIC, UNIQUE facts, science, or mechanisms about '{topic}'.
-- Strictly DO NOT use generic filler sentences like 'क्या आप जानते हैं', 'इसके पीछे का सच', or 'वैज्ञानिकों ने हाल ही में खुलासा किया'.
-- Scene 1: An intense hook about '{topic}' that surprises the viewer immediately.
-- Scene 2: The most shocking fact, benefit, or scientific mystery about '{topic}'.
-- Scene 3: The practical impact or conclusion.
-- Visual prompts MUST directly describe '{topic}' visually in detailed cinematic English (NO random human faces unless relevant).
+- Provide REAL, SPECIFIC, UNIQUE facts about '{topic}'.
+- DO NOT use generic lines like 'क्या आप जानते हैं' or 'इसके पीछे का सच'.
+- Scene 1: Direct curiosity hook about '{topic}'.
+- Scene 2: The most shocking fact or mechanism about '{topic}'.
+- Scene 3: Practical impact or conclusion.
+- Visual prompts MUST directly describe '{topic}' visually in detailed cinematic English.
 
-Return ONLY valid JSON matching this schema:
+Return ONLY valid JSON:
 {{
   "scenes": [
     {{"speech": "पहला सीन वाक्य हिंदी में", "visual_prompt": "cinematic hyperrealistic 8k shot of {topic}, dramatic lighting"}},
-    {{"speech": "दूसरा सीन वाक्य हिंदी में", "visual_prompt": "cinematic macro close-up shot showing detail of {topic}, 8k"}},
-    {{"speech": "तीसरा सीन वाक्य हिंदी में", "visual_prompt": "epic cinematic wide angle view of {topic}, masterpiece"}}
+    {{"speech": "दूसरा सीन वाक्य हिंदी में", "visual_prompt": "cinematic close-up detailed shot of {topic}, 8k"}},
+    {{"speech": "तीसरा सीन वाक्य हिंदी में", "visual_prompt": "epic cinematic wide view of {topic}, masterpiece"}}
   ]
 }}
 """
@@ -96,23 +92,30 @@ Return ONLY valid JSON matching this schema:
         }
     }
 
-    res = requests.post(url, headers=headers, json=payload, timeout=15)
-    if res.status_code != 200:
-        raise Exception(f"Gemini API Error ({res.status_code}): {res.text}")
+    # उपलब्ध मॉडल्स की लिस्ट
+    models_to_try = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
+    last_err = ""
 
-    data = res.json()
-    try:
-        out_text = data['candidates'][0]['content']['parts'][0]['text']
-        match = re.search(r'\{.*\}', out_text, re.DOTALL)
-        if not match:
-            raise Exception("Gemini ने सही JSON फॉर्मेट नहीं लौटाया।")
-        parsed = json.loads(match.group(0))
-        if "scenes" in parsed and len(parsed["scenes"]) >= 3:
-            return parsed["scenes"]
-        else:
-            raise Exception("Gemini आउटपुट में 3 सीन्स नहीं मिले।")
-    except Exception as e:
-        raise Exception(f"Gemini Parsing Error: {str(e)} | Raw: {out_text[:100]}")
+    for m in models_to_try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={GEMINI_API_KEY}"
+        try:
+            # 45 सेकंड का पर्याप्त टाइमआउट ताकि कभी Read Timeout न हो
+            res = requests.post(url, headers=headers, json=payload, timeout=45)
+            if res.status_code == 200:
+                data = res.json()
+                out_text = data['candidates'][0]['content']['parts'][0]['text']
+                match = re.search(r'\{.*\}', out_text, re.DOTALL)
+                if match:
+                    parsed = json.loads(match.group(0))
+                    if "scenes" in parsed and len(parsed["scenes"]) >= 3:
+                        return parsed["scenes"]
+            else:
+                last_err = f"{m} ({res.status_code}): {res.text[:150]}"
+        except Exception as e:
+            last_err = f"{m} Error: {str(e)}"
+            continue
+
+    raise Exception(f"Gemini Response Failed: {last_err}")
 
 def get_file_duration(file_path):
     cmd = f"ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 \"{file_path}\""
@@ -126,7 +129,7 @@ def download_visual(prompt, out_filename, topic, idx):
     clean_p = requests.utils.quote(f"{prompt}, vertical 9:16 portrait orientation, cinematic, photorealistic, 8k")
     url = f"https://image.pollinations.ai/prompt/{clean_p}?width=576&height=1024&nologo=true&model=turbo"
     try:
-        r = requests.get(url, timeout=25)
+        r = requests.get(url, timeout=30)
         if r.status_code == 200 and len(r.content) > 10000:
             with open(out_filename, "wb") as f:
                 f.write(r.content)
@@ -134,11 +137,10 @@ def download_visual(prompt, out_filename, topic, idx):
     except Exception:
         pass
 
-    # बैकअप अनस्प्लैश इमेज (ताकि स्क्रीन काली न रहे)
     try:
-        clean_topic = re.sub(r'[^a-zA-Z]', '', topic) or "nature"
+        clean_topic = re.sub(r'[^a-zA-Z]', '', topic) or "cinematic"
         backup_url = f"https://images.unsplash.com/photo-1518837695005-2083093ee35b?auto=format&fit=crop&w=576&h=1024&q=80"
-        r2 = requests.get(backup_url, timeout=10)
+        r2 = requests.get(backup_url, timeout=12)
         if r2.status_code == 200 and len(r2.content) > 10000:
             with open(out_filename, "wb") as f:
                 f.write(r2.content)
@@ -194,7 +196,7 @@ async def build_viral_reel(topic, update: Update):
     scenes = generate_script_dynamic(topic)
     
     script_text = "\n\n".join([f"🎬 *सीन {i+1}:* {s['speech']}" for i, s in enumerate(scenes)])
-    await update.message.reply_text(f"📝 *जेमिनी द्वारा तैयार ओरिजिनल स्क्रिप्ट:*\n\n{script_text}", parse_mode="Markdown")
+    await update.message.reply_text(f"📝 *ओरिजिनल स्क्रिप्ट:*\n\n{script_text}", parse_mode="Markdown")
 
     rendered_segments = []
     temp_files = []
@@ -271,10 +273,10 @@ async def build_viral_reel(topic, update: Update):
 async def generate_reel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     topic = clean_text(" ".join(context.args))
     if not topic:
-        await update.message.reply_text("कृपया विषय लिखें। उदाहरण: `/reel सुबह पानी पीने के वैज्ञानिक फायदे`")
+        await update.message.reply_text("कृपया विषय लिखें। उदाहरण: `/reel नीली आँखों का अनोखा रहस्य`")
         return
 
-    wait_msg = await update.message.reply_text(f"⚡ '{topic}' पर रील तैयार हो रही है... पूरा बनते ही यहाँ आ जाएगी!")
+    wait_msg = await update.message.reply_text(f"⚡ '{topic}' पर रील प्रोसेस हो रही है... पूरा बनते ही वीडियो आ जाएगी!")
     temp_files = []
     try:
         video, temp_files = await build_viral_reel(topic, update)
@@ -283,7 +285,7 @@ async def generate_reel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             with open(video, "rb") as vf:
                 await update.message.reply_video(video=vf, caption=f"🔥 {topic}")
         else:
-            await update.message.reply_text("⚠️ वीडियो रेंडर अधूरा रह गया, कृपया दोबारा कमांड भेजें।")
+            await update.message.reply_text("⚠️ वीडियो रेंडर अधूरा रह गया, पुनः प्रयास करें।")
 
     except Exception as e:
         await update.message.reply_text(f"❌ *सिस्टम एरर:*\n`{str(e)}`", parse_mode="Markdown")
@@ -301,7 +303,7 @@ async def generate_reel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👑 Hermes AI Pro Reel Studio सक्रिय है!\n\nरील बनाने के लिए भेजें:\n`/reel <विषय>`")
+    await update.message.reply_text("👑 Hermes Pro AI Studio लाइव है!\n\nरील बनाने के लिए भेजें:\n`/reel <विषय>`")
 
 if __name__ == "__main__":
     ensure_assets()
