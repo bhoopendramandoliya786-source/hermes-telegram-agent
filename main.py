@@ -92,13 +92,12 @@ Return ONLY valid JSON matching this schema:
         }
     }
 
-    # 503 और 404 से सुरक्षा के लिए मॉडल्स की सूची
     models_to_try = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-1.5-flash"]
     last_error = ""
 
     for model_name in models_to_try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
-        for attempt in range(2):
+        for _ in range(2):
             try:
                 res = requests.post(url, headers=headers, json=payload, timeout=35)
                 if res.status_code == 200:
@@ -177,8 +176,8 @@ def make_full_subtitle(text, png_path, width=576, height=1024):
     if cur:
         lines.append(" ".join(cur))
 
-    # सबटाइटल स्क्रीन के 60% हिस्से पर
-    y = int(height * 0.60)
+    # सबटाइटल स्क्रीन के 58% हिस्से पर ताकि नीचे से कभी न कटे
+    y = int(height * 0.58)
     for line in lines:
         bbox = draw.textbbox((0, 0), line, font=font)
         tw = bbox[2] - bbox[0]
@@ -220,7 +219,6 @@ async def build_viral_reel(topic, update: Update):
             await comm.save(scene_audio)
 
         dur = get_file_duration(scene_audio)
-        total_frames = int(dur * 30)
 
         vis_prompt = sc.get("visual_prompt", f"{topic} dynamic cinematic view")
         ok = download_visual(vis_prompt, scene_img, topic, idx)
@@ -230,17 +228,16 @@ async def build_viral_reel(topic, update: Update):
 
         make_full_subtitle(speech_text, sub_png, width=W, height=H)
 
-        # 512MB RAM सुरक्षित ज़ूम फ़िल्टर
+        # 0% RAM लोड: कोई भारी ज़ूम नहीं, सिर्फ सीधी स्केल और ओवरले (100% स्टेबल)
         filter_complex = (
-            f"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},"
-            f"zoompan=z='min(zoom+0.0008,1.10)':d={total_frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={W}x{H}:fps=30[vbg];"
+            f"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H}[vbg];"
             f"[vbg][1:v]overlay=0:0[vout]"
         )
 
         ff_cmd = (
             f"ffmpeg -y -loop 1 -t {dur} -i \"{scene_img}\" -i \"{sub_png}\" -i \"{scene_audio}\" "
-            f"-filter_complex \"{filter_complex}\" -map \"[vout]\" -map 2:a -r 30 -c:v libx264 "
-            f"-preset ultrafast -bufsize 256k -threads 1 -c:a aac \"{seg_out}\""
+            f"-filter_complex \"{filter_complex}\" -map \"[vout]\" -map 2:a -r 25 -c:v libx264 "
+            f"-preset ultrafast -threads 1 -c:a aac \"{seg_out}\""
         )
         subprocess.run(ff_cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if os.path.exists(seg_out):
@@ -265,7 +262,7 @@ async def build_viral_reel(topic, update: Update):
         mix_cmd = (
             f"ffmpeg -y -i \"{raw_merged}\" -stream_loop -1 -i \"{BGM_PATH}\" "
             f"-filter_complex \"[1:a]volume=0.10[bgm];[0:a][bgm]amix=inputs=2:duration=first[aout]\" "
-            f"-map 0:v -map \"[aout]\" -r 30 -c:v copy -c:a aac \"{final_video}\""
+            f"-map 0:v -map \"[aout]\" -r 25 -c:v copy -c:a aac \"{final_video}\""
         )
         subprocess.run(mix_cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     else:
@@ -281,7 +278,7 @@ async def generate_reel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("कृपया विषय लिखें। उदाहरण: `/reel वायुमंडल का रहस्य`")
         return
 
-    wait_msg = await update.message.reply_text(f"⚡ '{topic}' पर रील तैयार की जा रही है... पूरा बनते ही वीडियो आ जाएगी!")
+    wait_msg = await update.message.reply_text(f"⚡ '{topic}' पर रील तैयार हो रही है... 40 सेकंड इंतज़ार करें!")
     temp_files = []
     try:
         video, temp_files = await build_viral_reel(topic, update)
@@ -290,7 +287,7 @@ async def generate_reel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             with open(video, "rb") as vf:
                 await update.message.reply_video(video=vf, caption=f"🔥 {topic}")
         else:
-            await update.message.reply_text("⚠️ वीडियो रेंडर अधूरा रह गया, कृपया दोबारा कमांड भेजें।")
+            await update.message.reply_text("⚠️ वीडियो रेंडर अधूरा रह गया, दोबारा भेजें।")
 
     except Exception as e:
         await update.message.reply_text(f"❌ *सिस्टम एरर:*\n`{str(e)}`", parse_mode="Markdown")
@@ -308,7 +305,7 @@ async def generate_reel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👑 Hermes AI Reel Studio सक्रिय है!\n\nरील बनाने के लिए भेजें:\n`/reel <विषय>`")
+    await update.message.reply_text("👑 Hermes AI Studio लाइव है!\n\nरील बनाने के लिए भेजें:\n`/reel <विषय>`")
 
 if __name__ == "__main__":
     ensure_assets()
